@@ -44,9 +44,6 @@ class GameTime(BaseModel):
         examples=["Monday", "Tuesday", "Sunday"],
         description="Current day of the week, if applicable to game logic."
     )
-    # Optional: If game time progresses differently from real time
-    # game_date_str: Optional[str] = Field(None, description="In-game date, e.g., 'Year 2, Day 35'")
-    # season: Optional[str] = Field(None, description="In-game season, e.g., 'Spring', 'Summer'")
 
 class NPCIdentifier(BaseModel):
     npc_id: str = Field(..., min_length=1, description="Unique identifier for the NPC.")
@@ -57,7 +54,7 @@ class MessageRole(str, Enum):
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
-    TOOL = "tool" # For future use with LLM tool calling
+    TOOL = "tool" 
 
 class Message(BaseModel):
     role: MessageRole
@@ -67,11 +64,6 @@ class Message(BaseModel):
         min_length=1,
         description="Optional name for multi-agent contexts or to identify the source of a tool message."
     )
-    # For potential future Ollama image support with LLaVA, etc.
-    # images: Optional[List[str]] = Field(None, description="List of base64 encoded images, if supported by the model.")
-    # For tool usage (if role is 'assistant' with tool_calls or role is 'tool')
-    # tool_calls: Optional[List[Dict[str, Any]]] = None
-    # tool_call_id: Optional[str] = None
 
 class OllamaChatOptions(BaseModel):
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Controls randomness. Lower is more deterministic.")
@@ -80,7 +72,6 @@ class OllamaChatOptions(BaseModel):
     top_p: Optional[float] = Field(None, ge=0.0, le=1.0, description="Works with top-k. Higher value = more diversity.")
     stop: Optional[List[str]] = Field(None, description="Sequences where the LLM will stop generating. e.g. ['\n', 'User:']")
     seed: Optional[int] = Field(None, description="Set a seed for reproducible outputs.")
-    # Add other Ollama options as needed: mirostat, tfs_z, num_predict, etc.
 
 class ChatRequestBase(BaseModel):
     model: Optional[str] = Field(None, description="Ollama model to use. Defaults to system setting if None.")
@@ -101,33 +92,32 @@ class SimpleChatRequest(ChatRequestBase):
 class ChatResponse(BaseModel):
     response: str = Field(..., description="The LLM's generated textual response.")
     model_used: str = Field(..., description="The Ollama model that generated this response.")
-    created_at: datetime = Field(..., description="Timestamp (UTC) when Ollama created the response message.") # Should be UTC
+    created_at: datetime = Field(..., description="Timestamp (UTC) when Ollama created the response message.") 
     api_processing_time_ms: float = Field(..., description="Server-side API processing time for this request in milliseconds.")
     ollama_processing_duration_ns: Optional[int] = Field(None, description="Duration of Ollama's processing in nanoseconds, if available from response.")
     conversation_id: Optional[str] = Field(None, description="ID of the conversation session.")
     done_reason: Optional[str] = Field(None, description="Reason the generation finished (e.g., 'stop', 'length').")
-    # For streamed responses, this might be the final aggregated response object
 
 # --- 遊戲物件互動模型 (Game Object Interaction Models) ---
-class InteractingObjectInfo(NPCIdentifier): # Inherits npc_id, name
+class InteractingObjectInfo(NPCIdentifier): 
     model_override: Optional[str] = Field(None, description="Specific Ollama model for this object in this interaction, overrides default.")
-    initial_prompt_to_llm: Optional[str] = Field(None, description="A specific prompt to the LLM to guide its first utterance for this object (e.g., 'React to the loud noise you just heard.').")
+    initial_prompt_to_llm: Optional[str] = Field(None, description="A specific prompt to the LLM to guide its first utterance for this object.")
     emotional_state_input: Optional[str] = Field(None, examples=["happy", "cautious", "annoyed"], description="Input emotional state to influence dialogue style.")
     dialogue_mode_tag: Optional[str] = Field(None, examples=["formal_scholar", "street_urchin_talkative"], description="Tag for a predefined dialogue mode or personality overlay.")
 
 class GameInteractionRequest(BaseModel):
     interacting_objects: conlist(InteractingObjectInfo, min_length=1)
-    scene_context_description: Optional[str] = Field(None, description="Overall context of the interaction scene (e.g., 'A tense standoff in the old church').")
+    scene_context_description: Optional[str] = Field(None, description="Overall context of the interaction scene (e.g., 'In the apartment living room').") # Modified example
     game_time_context: Optional[GameTime] = Field(None, description="Current game time context for this interaction.")
-    max_turns_per_object: int = Field(1, gt=0, le=5, description="Maximum number of speaking turns for each object in this specific interaction request.") # Max 5 to prevent overly long requests
-    # interaction_session_id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()), description="ID for this specific interaction session.")
+    max_turns_per_object: int = Field(1, gt=0, le=5, description="Maximum number of speaking turns for each object in this specific interaction request.")
+    interaction_id_to_continue: Optional[str] = Field(None, description="ID of a previous interaction session to continue from.") # Added from dialogue_service.py
 
-class DialogueTurn(NPCIdentifier): # Inherits npc_id, name
-    message_original_language: str = Field(..., description="The original dialogue text generated by the LLM (e.g., in English).")
+class DialogueTurn(NPCIdentifier): 
+    message_original_language: str = Field(..., description="The original dialogue text generated by the LLM.")
     message_translated_zh_tw: Optional[str] = Field(None, description="Traditional Chinese translation for display in Unity.")
     model_used: str
     timestamp_api_generated: datetime = Field(default_factory=default_aware_utcnow, description="Timestamp when this turn was generated by the API.")
-    llm_generated_emotional_tone: Optional[str] = Field(None, description="Emotional tone inferred or explicitly stated by the LLM in its response (e.g., 'friendly', 'sarcastic').")
+    llm_generated_emotional_tone: Optional[str] = Field(None, description="Emotional tone inferred or explicitly stated by the LLM.")
     turn_processing_time_ms: Optional[float] = Field(None, description="Processing time for this individual turn.")
 
 class GameInteractionResponse(BaseModel):
@@ -137,80 +127,64 @@ class GameInteractionResponse(BaseModel):
 
 # --- NPC 狀態與記憶核心模型 (NPC State & Memory Core Models) ---
 class NPCEmotionalState(BaseModel):
-    primary_emotion: str = Field("neutral", examples=["neutral", "happy", "sad", "angry", "fearful", "curious"])
+    primary_emotion: str = Field("neutral", examples=["neutral", "happy", "sad", "angry", "fearful", "curious", "annoyed", "content"]) # Added more examples
     intensity: float = Field(0.5, ge=0.0, le=1.0, description="Intensity of the primary emotion (0.0 to 1.0).")
-    mood_tags: List[str] = Field(default_factory=list, examples=[["content", "slightly_irritable"], ["excited"]], description="Additional mood tags or nuances.")
+    mood_tags: List[str] = Field(default_factory=list, examples=[["calm", "slightly_distracted"], ["energetic"]], description="Additional mood tags or nuances.")
     last_significant_change_at: datetime = Field(default_factory=default_aware_utcnow)
     reason_for_last_change: Optional[str] = Field(None, max_length=200, description="Brief summary of event causing last significant emotion change.")
 
 class NPCScheduleRule(BaseModel):
     rule_id: str = Field(default_factory=lambda: f"sched_{uuid.uuid4().hex[:6]}")
-    time_period_tag: str = Field(..., examples=["morning_work", "afternoon_leisure", "evening_social", "night_rest", "anytime_if_urgent"], description="Tag representing the applicable time period or condition.")
-    # Example: Use tags and let game logic map them to actual game times or conditions
-    # Or define specific start/end times:
-    # start_time_condition: Optional[str] = Field(None, description="Condition for start, e.g., '08:00', 'sunrise', 'after_market_opens'")
-    # end_time_condition: Optional[str] = Field(None, description="Condition for end, e.g., '17:00', 'sunset', 'before_storm'")
-    activity_description: str = Field(..., max_length=256, description="Description of the NPC's scheduled activity.")
-    target_location_name_or_area: Optional[str] = Field(None, description="Name of target landmark or general area for this activity.")
-    target_position: Optional[Position] = Field(None, description="Specific coordinates if the activity has a precise location.")
+    time_period_tag: str = Field(..., examples=["morning_kitchen_routine", "afternoon_living_room_relax", "evening_bedroom_personal_time", "late_night_quiet_activity", "anytime_bathroom_break"], description="Tag representing the applicable time period or condition within apartment life.") # Modified examples
+    activity_description: str = Field(..., max_length=256, description="Description of the NPC's scheduled activity. e.g., 'Preparing breakfast', 'Reading on the sofa', 'Using the computer in my room'") # Modified examples
+    target_location_name_or_area: Optional[str] = Field(None, description="Name of target landmark or general area for this activity. e.g., 'Kitchen Stove', 'Living Room Sofa', 'Bedroom_A_Desk', 'Bathroom'") # Modified examples
+    target_position: Optional[Position] = Field(None, description="Specific coordinates if the activity has a precise location within the room/area.")
     is_mandatory: bool = Field(True)
-    override_conditions: List[str] = Field(default_factory=list, examples=[["player_urgent_request", "critical_event_X"]], description="Conditions under which this rule can be overridden.")
-    # For "來不及離開就得待在他家" type rule:
-    # contingency_plan: Optional[str] = Field(None, description="What to do if the rule cannot be completed as planned, e.g., 'If too late to return home from Friend's House, stay at Friend's House.'")
+    override_conditions: List[str] = Field(default_factory=list, examples=[["urgent_visitor_at_main_entrance", "apartment_emergency_alarm"]], description="Conditions under which this rule can be overridden.")
 
-class VisitedLocationEntry(Position): # x, y from Position
+class VisitedLocationEntry(Position): 
     timestamp_visited: datetime = Field(..., description="Timestamp (UTC) when the location was marked as visited/arrived at.")
-    # duration_seconds: Optional[int] = Field(None, gt=0, description="How long NPC stayed (if known).") # This might be hard to track accurately.
 
 class LongTermMemoryEntry(BaseModel):
     memory_id: str = Field(default_factory=lambda: f"ltm_{uuid.uuid4().hex[:8]}")
     timestamp_created: datetime = Field(default_factory=default_aware_utcnow)
     content_text: str = Field(..., max_length=512, description="The textual content of the memory.")
-    memory_type_tag: str = Field("generic_observation", examples=["dialogue_summary", "player_promise", "learned_fact", "significant_event"], description="Categorization tag for the memory.")
+    memory_type_tag: str = Field("generic_observation", examples=["dialogue_summary_with_roommate", "learned_about_neighbor", "shared_apartment_event"], description="Categorization tag for the memory.") # Modified examples
     keywords: List[str] = Field(default_factory=list, description="Keywords for easier retrieval.")
-    # relevance_score: Optional[float] = None # Might be dynamically calculated during retrieval
     related_npc_ids: List[str] = Field(default_factory=list)
 
-class NPCMemoryFile(NPCIdentifier): # Structure of the NPC's JSON memory file (inherits npc_id, name)
-    # This is the top-level object that will be serialized to/from JSON for each NPC
+class NPCMemoryFile(NPCIdentifier): 
     personality_description: str = Field(
-        "A generally agreeable and somewhat predictable individual, focused on their daily routines unless something more interesting happens.",
-        max_length=1024, # Limit to avoid overly long personalities in the file
+        "A typical apartment resident, trying to coexist with roommates. Generally follows routines and values personal space but can be social in common areas.", # Modified example
+        max_length=1024, 
         description="Core personality traits and behavioral tendencies for the LLM."
     )
     last_saved_at: datetime = Field(default_factory=default_aware_utcnow)
-    
-    # Snapshots of state when last saved (can be updated by the game)
     last_known_game_time: Optional[GameTime] = None
     last_known_position: Optional[Position] = None
-    
     current_emotional_state: NPCEmotionalState = Field(default_factory=NPCEmotionalState)
-    active_schedule_rules: List[NPCScheduleRule] = Field(default_factory=list) # NPC's current understanding of their schedule
-    
-    short_term_location_history: List[VisitedLocationEntry] = Field(default_factory=list) # For visit_threshold logic
+    active_schedule_rules: List[NPCScheduleRule] = Field(default_factory=list) 
+    short_term_location_history: List[VisitedLocationEntry] = Field(default_factory=list) 
     long_term_event_memories: List[LongTermMemoryEntry] = Field(default_factory=list)
 
-    # Example of how to ensure npc_id is always present when creating from dict
     @model_validator(mode='before')
     @classmethod
     def check_npc_id_present(cls, data: Any) -> Any:
         if isinstance(data, dict) and 'npc_id' not in data:
-            # This should ideally not happen if requests are validated, but good for direct instantiation
             raise ValueError('npc_id is essential for NPCMemoryFile')
         return data
 
 # --- NPC 移動決策模型 (NPC Movement Decision Models) ---
-class EntityContextInfo(NPCIdentifier, Position): # For players or other NPCs nearby
-    entity_type: str = Field(..., examples=["player", "npc_friendly", "npc_hostile"])
+class EntityContextInfo(NPCIdentifier, Position): 
+    entity_type: str = Field(..., examples=["player", "npc_roommate", "npc_visitor"]) # Modified examples
     is_significant_to_npc: Optional[bool] = Field(None, description="Does the decision-making NPC have a notable relationship or history with this entity?")
-    # observed_activity: Optional[str] = Field(None, description="What this entity is currently observed doing.")
 
 class LandmarkContextInfo(BaseModel):
     landmark_name: str
     position: Position
-    landmark_type_tag: Optional[str] = Field(None, examples=["shop_general", "player_home", "npc_A_home", "park_main_fountain", "quest_location_temple"])
-    owner_id: Optional[str] = Field(None, description="NPC ID of the owner, if any.")
-    current_status_notes: List[str] = Field(default_factory=list, examples=[["Closed for the night"], ["Currently crowded"], ["Rumored to have a hidden item"]])
+    landmark_type_tag: Optional[str] = Field(None, examples=["bedroom", "kitchen", "living_room", "bathroom", "dining_room", "room_entrance", "furniture_sofa", "furniture_table", "appliance_stove", "appliance_refrigerator", "obstacle_plant"]) # Modified examples for apartment
+    owner_id: Optional[str] = Field(None, description="NPC ID of the owner (e.g., for a private bedroom).") # Clarified description
+    current_status_notes: List[str] = Field(default_factory=list, examples=[["occupancy_occupied_by_NPC_A"], ["owner_presence_absent"], ["state_tv_on"], ["state_food_cooking_on_stove"]], description="Dynamic notes about the landmark, e.g., if a bathroom is occupied, if a room owner is present.") # Modified examples
 
 class SceneBoundaryInfo(BaseModel):
     min_x: float
@@ -218,7 +192,7 @@ class SceneBoundaryInfo(BaseModel):
     min_y: float
     max_y: float
 
-    @model_validator(mode='after') # Use 'after' to access validated fields
+    @model_validator(mode='after') 
     def check_coordinate_logic(self) -> 'SceneBoundaryInfo':
         if self.max_x < self.min_x:
             raise ValueError('SceneBoundaryInfo: max_x must be greater than or equal to min_x')
@@ -226,40 +200,26 @@ class SceneBoundaryInfo(BaseModel):
             raise ValueError('SceneBoundaryInfo: max_y must be greater than or equal to min_y')
         return self
 
-class NPCMovementRequest(NPCIdentifier): # Request body for /npc/think
+class NPCMovementRequest(NPCIdentifier): 
     model_override: Optional[str] = None
-    
-    # Current state snapshots REQUIRED from Unity/Game Engine for this decision tick
     current_npc_position: Position
     current_game_time: GameTime
-    # current_npc_emotional_state: NPCEmotionalState # This will be loaded from NPCMemoryFile by the service
-
-    # Scene context provided by Unity/Game Engine
     nearby_entities: List[EntityContextInfo] = Field(default_factory=list)
-    visible_landmarks: List[LandmarkContextInfo] = Field(default_factory=list)
+    visible_landmarks: List[LandmarkContextInfo] = Field(default_factory=list) # Crucial for sending updated landmark statuses
     scene_boundaries: SceneBoundaryInfo
-    
-    # Dialogue/Interaction context
     recent_dialogue_summary_for_movement: Optional[str] = Field(None, max_length=1024, description="Key takeaways from recent dialogue relevant to movement.")
-    explicit_player_movement_request: Optional[Position] = Field(None, description="If player directly asked NPC to go to a specific coordinate or named landmark (Unity resolves name to Position).")
-    # ongoing_task_id: Optional[str] = Field(None, description="ID of any current high-priority task the NPC is engaged in.")
+    explicit_player_movement_request: Optional[Position] = Field(None, description="If player directly asked NPC to go to a specific coordinate or named landmark.")
 
-
-class NPCMovementResponse(NPCIdentifier): # Response from /npc/think
+class NPCMovementResponse(NPCIdentifier): 
     llm_full_reasoning_text: str = Field(..., description="The complete reasoning text from the LLM for transparency and debugging.")
     chosen_action_summary: str = Field(..., description="A concise, in-character summary of the NPC's chosen action.")
     target_destination: Position
-    
-    # Structured breakdown of decision drivers from LLM's structured output
     primary_decision_drivers: Dict[str, bool] = Field(
         default_factory=dict,
-        examples=[{"dialogue_driven": True, "schedule_driven": False, "emotion_driven": False, "memory_driven": False, "exploration_driven": False}],
+        examples=[{"dialogue_driven": False, "schedule_driven": True, "emotion_driven": False, "memory_driven": False, "access_rules_consideration": True, "exploration_driven": False}], # Added access_rules_consideration
         description="Boolean flags indicating primary drivers parsed from LLM response."
     )
-    
-    # Emotional state might change due to decision or events during decision making
     updated_emotional_state_snapshot: Optional[NPCEmotionalState] = Field(None, description="NPC's emotional state after this decision, if changed.")
-    
     api_processing_time_ms: float
 
 # --- Admin & Health Check Models ---
@@ -268,30 +228,25 @@ class HealthStatusResponse(BaseModel):
     api_version: str
     service_name: str
     ollama_connection_status: str
-    # last_successful_ollama_interaction_at: Optional[datetime] = None
 
-class OllamaModelInfo(BaseModel): # Renamed from ModelInfo to be more specific
+class OllamaModelInfo(BaseModel): 
     name: str
-    modified_at: datetime # Ollama returns ISO string, Pydantic converts to datetime
-    size: int # in bytes
+    modified_at: datetime 
+    size: int 
     digest: str
     details: Dict[str, Any]
 
 class ListOllamaModelsResponse(BaseModel):
     models: List[OllamaModelInfo]
 
-class ClearMemoryAdministrativelyResponse(BaseModel): # Renamed for clarity
-    status: str # "success", "not_found", "error"
+class ClearMemoryAdministrativelyResponse(BaseModel): 
+    status: str 
     message: str
 
-class APIErrorDetail(BaseModel): # Renamed from ErrorDetail
+class APIErrorDetail(BaseModel): 
     error_code: Optional[str] = Field(None, description="Optional internal error code or category.")
     message: str
-    context_info: Optional[Dict[str, Any]] = Field(None, description="Additional context about the error (e.g., field name for validation errors).")
+    context_info: Optional[Dict[str, Any]] = Field(None, description="Additional context about the error.")
 
-class APIErrorResponse(BaseModel): # Renamed from ErrorResponse
+class APIErrorResponse(BaseModel): 
     error: APIErrorDetail
-
-# Example of using RootModel for a response that is just a list
-# class ListOfStringsResponse(RootModel[List[str]]):
-#     root: List[str]

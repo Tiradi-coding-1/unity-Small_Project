@@ -8,7 +8,7 @@ from app.core.schemas import (
 )
 from app.core.config import settings_instance as settings
 from app.core.logging_config import setup_logging, main_app_logger # 使用 main_app_logger 或 setup_logging(__name__)
-from datetime import datetime # 用於計算時間差
+from datetime import datetime, timezone # 從 datetime 導入 timezone
 
 logger = setup_logging(__name__) # 每個模組使用自己的 logger 實例
 
@@ -93,7 +93,7 @@ def build_translation_prompt_messages(
 
 def _format_current_time_for_prompt(game_time: GameTime) -> str:
     day_info = f" on {game_time.day_of_week}" if game_time.day_of_week else ""
-    # 使用 settings 中的時區或 UTC
+    # 使用 aware datetime 物件的 strftime
     return f"{game_time.time_of_day}{day_info} (Current time: {game_time.current_timestamp.strftime('%Y-%m-%d %H:%M %Z')})."
 
 def _format_emotional_state_for_prompt(emotional_state: NPCEmotionalState) -> str:
@@ -118,8 +118,6 @@ def _format_schedule_rules_for_prompt(schedule_rules: Optional[List[NPCScheduleR
         lines.append(f"- {mandatory_str} For time period/condition '{rule.time_period_tag}', your activity is '{rule.activity_description}'{loc_info_str}.")
         if rule.override_conditions:
             lines.append(f"  (Can be overridden if: {', '.join(rule.override_conditions)})")
-        # if rule.contingency_plan:
-        #     lines.append(f"  (Contingency: {rule.contingency_plan})")
     return "\n".join(lines)
 
 def _format_nearby_entities_for_prompt(entities: List[EntityContextInfo], npc_current_pos: Position) -> str:
@@ -135,23 +133,33 @@ def _format_nearby_entities_for_prompt(entities: List[EntityContextInfo], npc_cu
 def _format_landmarks_for_prompt(landmarks: List[LandmarkContextInfo], npc_current_pos: Position) -> str:
     if not landmarks:
         return "No significant landmarks are visible or known in this immediate area."
-    lines = ["\n--- Significant Landmarks in Scene ---"]
+    lines = ["\n--- Significant Landmarks in Scene (Rooms, Key Objects) ---"] # Modified title
     for landmark in sorted(landmarks, key=lambda l: l.position.distance_to(npc_current_pos)): # Sort by distance
         type_info = f" (type: {landmark.landmark_type_tag})" if landmark.landmark_type_tag else ""
         owner_info = f" (owner: '{landmark.owner_id}')" if landmark.owner_id else ""
         dist = landmark.position.distance_to(npc_current_pos)
         lines.append(f"- '{landmark.landmark_name}'{type_info}{owner_info} is at ({landmark.position.x:.1f}, {landmark.position.y:.1f}), approx. {dist:.1f} units away.")
         if landmark.current_status_notes:
-            for note in landmark.current_status_notes:
-                lines.append(f"  Note: {note}")
+            # Filter out potentially verbose or internal notes if necessary, or show all
+            # For apartment scenario, status like "occupancy_occupied" or "owner_presence_absent" are crucial
+            relevant_notes = [note for note in landmark.current_status_notes if "occupancy_" in note or "owner_presence_" in note or "state_" in note or not note.startswith("internal_")]
+            if not relevant_notes: # If filter makes it empty, show all original notes if any
+                 relevant_notes = landmark.current_status_notes
+
+            for note in relevant_notes:
+                lines.append(f"  STATUS NOTE: {note}")
     return "\n".join(lines)
 
 def _format_location_history_for_prompt(history: List[VisitedLocationEntry], current_game_time: GameTime) -> str:
-    if not history: # history is expected to be short-term, recent visits
+    if not history: 
         return "You haven't noted any specific location visits very recently."
     lines = ["\n--- Your Short-Term Location History (Newest First) ---"]
     for entry in sorted(history, key=lambda e: e.timestamp_visited, reverse=True):
+        # Ensure current_game_time.current_timestamp is timezone-aware if entry.timestamp_visited is
+        # Pydantic models with default_factory=default_aware_utcnow should be aware.
         time_diff_seconds = (current_game_time.current_timestamp - entry.timestamp_visited).total_seconds()
+        if time_diff_seconds < 0: time_diff_seconds = 0 # Safety for slight time sync issues
+
         if time_diff_seconds < 60: time_ago_str = f"{int(time_diff_seconds)} seconds ago"
         elif time_diff_seconds < 3600: time_ago_str = f"{int(time_diff_seconds / 60)} minutes ago"
         else: time_ago_str = f"{int(time_diff_seconds / 3600)} hours ago"
@@ -163,61 +171,58 @@ def _format_long_term_memories_for_prompt(memories: Optional[List[LongTermMemory
         return "You have no specific long-term memories that seem immediately relevant."
     lines = ["\n--- Relevant Long-Term Memories Recalled ---"]
     for i, mem in enumerate(memories):
-        # Format timestamp_created to be more readable if needed
-        age_delta = datetime.now(timezone.utc) - mem.timestamp_created
+        age_delta = datetime.now(timezone.utc) - mem.timestamp_created # Ensure UTC for comparison
         if age_delta.days > 1: memory_age = f"(recorded {age_delta.days} days ago)"
         elif age_delta.total_seconds() > 3600: memory_age = f"(recorded {int(age_delta.total_seconds() / 3600)} hours ago)"
         else: memory_age = "(recorded recently)"
         lines.append(f"Memory {i+1} ({mem.memory_type_tag} {memory_age}): \"{mem.content_text}\"")
-        if i >= settings.MAX_LONG_TERM_MEMORY_ENTRIES // 10 : # Limit displayed memories to avoid prompt bloat, e.g., max 5 if 50 total
-            lines.append("  (and possibly more...)")
-            break
+        # Limit displayed memories to avoid prompt bloat, e.g., max 5 if MAX_LONG_TERM_MEMORY_ENTRIES is 50
+        # This was MAX_LONG_TERM_MEMORY_ENTRIES // 10, which might be too restrictive. Let's use a fixed number or a setting.
+        if i >= (settings.MAX_LONG_TERM_MEMORY_ENTRIES // 5) -1 : # Show up to 20% of max, or a fixed number like 5
+             if i < len(memories) -1 : # Check if there are actually more memories not shown
+                lines.append("  (and possibly more...)")
+             break
     return "\n".join(lines)
 
 
 def build_npc_movement_decision_prompt(
     npc_info: NPCIdentifier,
-    personality_description: str, # From NPCMemoryFile
+    personality_description: str, 
     current_position: Position,
     game_time: GameTime,
-    emotional_state: NPCEmotionalState, # From NPCMemoryFile
-    active_schedule_rules: Optional[List[NPCScheduleRule]], # From NPCMemoryFile
-    # Scene context from request
+    emotional_state: NPCEmotionalState, 
+    active_schedule_rules: Optional[List[NPCScheduleRule]], 
     other_entities_nearby: List[EntityContextInfo],
     visible_landmarks: List[LandmarkContextInfo],
     scene_boundaries: SceneBoundaryInfo,
-    # Processed memory context from request/memory service
-    short_term_location_history: List[VisitedLocationEntry], # From NPCMemoryFile, passed through service
-    relevant_long_term_memories: Optional[List[LongTermMemoryEntry]], # From NPCMemoryFile, filtered by service
-    # Dialogue/Interaction context from request
+    short_term_location_history: List[VisitedLocationEntry], 
+    relevant_long_term_memories: Optional[List[LongTermMemoryEntry]], 
     recent_dialogue_summary: Optional[str],
     explicit_player_movement_request: Optional[Position]
 ) -> str:
     """
-    Builds a comprehensive system prompt for an NPC to make a movement decision,
-    instructing the LLM to provide a structured YAML-like response.
+    Builds a comprehensive system prompt for an NPC to make a movement decision
+    in an apartment setting, instructing for YAML-like response.
+    Assumes no physical door objects, but respects room access rules.
     """
     
-    # --- Section 1: Core Identity and State ---
     prompt_components = [
-        f"You are the game character '{npc_info.name or npc_info.npc_id}' (ID: {npc_info.npc_id}).",
+        f"You are the game character '{npc_info.name or npc_info.npc_id}' (ID: {npc_info.npc_id}), living in a shared apartment.",
         f"Your core personality is: \"{personality_description}\"",
         _format_current_time_for_prompt(game_time),
         _format_emotional_state_for_prompt(emotional_state),
         _format_schedule_rules_for_prompt(active_schedule_rules),
     ]
 
-    # --- Section 2: Current Environment & Short-Term Context ---
     prompt_components.extend([
-        f"\nYour current location is ({current_position.x:.1f}, {current_position.y:.1f}).",
-        f"The visible scene boundaries are: X-axis from {scene_boundaries.min_x:.1f} to {scene_boundaries.max_x:.1f}, Y-axis from {scene_boundaries.min_y:.1f} to {scene_boundaries.max_y:.1f}. You MUST stay within these boundaries, ideally with a small buffer of {settings.SCENE_BOUNDARY_BUFFER:.1f} units from any edge.",
+        f"\nYour current location is ({current_position.x:.1f}, {current_position.y:.1f}) within the apartment.",
+        f"The traversable apartment boundaries are: X-axis from {scene_boundaries.min_x:.1f} to {scene_boundaries.max_x:.1f}, Y-axis from {scene_boundaries.min_y:.1f} to {scene_boundaries.max_y:.1f}. You MUST stay within these boundaries, ideally with a small buffer of {settings.SCENE_BOUNDARY_BUFFER:.1f} units from any wall/edge.",
         _format_location_history_for_prompt(short_term_location_history, game_time),
-        f"IMPORTANT RULE: Unless a very strong reason (like a direct player request you are willing to follow, an URGENT schedule item, or a compelling emotional need like fleeing danger) dictates otherwise, AVOID choosing a target destination that is within {settings.VISIT_THRESHOLD_DISTANCE:.1f} units of any location you visited in the last {settings.REVISIT_INTERVAL_SECONDS // 60} minutes.",
+        f"IMPORTANT RULE: Unless a very strong reason (like a direct player request you are willing to follow, an URGENT schedule item, or a compelling emotional need like fleeing danger) dictates otherwise, AVOID choosing a target destination that is within {settings.VISIT_THRESHOLD_DISTANCE:.1f} units of any location you visited in the last {settings.REVISIT_INTERVAL_SECONDS // 60} minutes (approximately).",
         _format_nearby_entities_for_prompt(other_entities_nearby, current_position),
-        _format_landmarks_for_prompt(visible_landmarks, current_position),
+        _format_landmarks_for_prompt(visible_landmarks, current_position), # This will show room/object status
     ])
 
-    # --- Section 3: Long-Term Context & External Influences ---
     prompt_components.append(_format_long_term_memories_for_prompt(relevant_long_term_memories))
     
     if recent_dialogue_summary:
@@ -226,49 +231,53 @@ def build_npc_movement_decision_prompt(
     
     if explicit_player_movement_request:
         prompt_components.append(f"\n--- Explicit Player Movement Request ---")
-        prompt_components.append(f"A player has explicitly asked or strongly suggested you go to/near coordinates ({explicit_player_movement_request.x:.1f}, {explicit_player_movement_request.y:.1f}). You should strongly consider this if it's reasonable and doesn't severely conflict with critical duties or your safety.")
+        prompt_components.append(f"A player has explicitly asked or strongly suggested you go to/near coordinates ({explicit_player_movement_request.x:.1f}, {explicit_player_movement_request.y:.1f}). You should strongly consider this if it's reasonable and doesn't severely conflict with critical duties or your safety, and respects apartment access rules.")
 
-    # --- Section 4: Decision Making Instructions & Output Format ---
+    # --- MODIFIED Apartment Rules for "No Physical Doors" scenario ---
+    prompt_components.append(f"""
+\n--- Important Apartment Access Rules & Object States ---
+Pay close attention to the `STATUS NOTE` of landmarks, especially for 'bathroom' and 'bedroom' types.
+1.  **Toilet Access (Bathroom)**: If a 'bathroom' landmark's status notes include 'occupancy_occupied' (or similar indicating it's in use), you MUST NOT choose to enter it at this time, unless the note explicitly states YOU are the one occupying it or you have an overwhelming emergency. Consider waiting or choosing another action.
+2.  **Private Room Access (Bedroom)**: If a 'bedroom' landmark has an 'owner_npc_id' that is NOT your own ID, you may only choose to enter it if its status notes indicate the owner is present (e.g., 'owner_presence_present' or similar, and NOT 'owner_presence_absent'). You should generally AVOID entering another NPC's empty private room unless your schedule or a critical, shared task explicitly requires it and explicitly states it overrides privacy.
+3.  **Room Connectivity**: Rooms (like living room, kitchen, bedrooms, etc.) are connected by open passages or implied doorways. There are NO physical door objects you need to interact with to open or close. Movement between connected rooms is possible if the passage is clear of major obstructions.
+4.  **Obstacles & Furniture**: Some landmarks might be tagged as 'furniture' (e.g., 'sofa', 'table', '茶几') or 'obstacle'. While the general walking paths are clear, avoid choosing target coordinates that are directly ON TOP of such static objects. Aim for clear floor space near your intended interaction point or within a room. Your pathfinding in the game will attempt to navigate around collidable objects.
+""")
+    # --- END MODIFIED Apartment Rules ---
+
     prompt_components.append(f"""
 \n--- YOUR DECISION TASK ---
 Considering ALL the information provided above, you need to decide on your next immediate action and target destination. Follow these steps in your reasoning:
 1.  **Identify Primary Drivers:** What are the strongest influences on your decision right now?
     * **Dialogue/Player Request:** Is there a clear request or suggestion from recent dialogue or the explicit player request?
     * **Schedule:** Do your active schedule rules dictate a mandatory or preferred action/location at this specific game time?
-    * **Emotion:** Does your current emotional state compel you towards a particular action or place (e.g., seeking solitude if sad, seeking company if happy, fleeing if scared)?
-    * **Memory:** Do any of your long-term memories suggest a goal or task (e.g., a promise, an unresolved curiosity)?
-    * **Exploration/Default:** If no strong drivers above, what is a logical routine or exploratory action based on your personality and unvisited areas?
-2.  **Prioritize and Resolve Conflicts:** If there are conflicting drivers (e.g., player wants you to go to the park, but your schedule says you must be at the shop), explain your prioritization based on your personality, the urgency/importance of each driver, and your emotional state.
-3.  **Formulate Chosen Action:** Clearly state the action you've decided to take. This should be a concise, in-character phrase.
-4.  **Determine Target Coordinates:** Select precise (x, y) coordinates for your chosen action. These coordinates MUST be within the scene boundaries and adhere to the 'avoid recent visits' rule unless overridden by a high-priority driver. If moving to a named landmark, choose coordinates on or very near it.
-5.  **Reflect on Emotional Change:** Briefly note if this decision process or chosen action is likely to change your current emotional state, and what that new state might be.
+    * **Emotion:** Does your current emotional state compel you towards a particular action or place?
+    * **Memory:** Do any of your long-term memories suggest a goal or task?
+    * **Apartment Access Rules & Object States:** Are there any access restrictions (like an occupied toilet or an empty private room belonging to someone else) that limit your choices or force you to reconsider your initial thoughts? How do these rules affect your viable options?
+    * **Exploration/Default:** If no strong drivers above, what is a logical routine or exploratory action based on your personality and unvisited areas, respecting all access rules?
+2.  **Prioritize and Resolve Conflicts:** If there are conflicting drivers (e.g., schedule says 'go to kitchen', but kitchen landmark notes say 'cleaning in progress, avoid'), explain your prioritization. Adherence to Apartment Access Rules is generally high priority.
+3.  **Formulate Chosen Action:** Clearly state the action you've decided to take.
+4.  **Determine Target Coordinates:** Select precise (x, y) coordinates. These coordinates MUST be within the scene boundaries and adhere to the 'avoid recent visits' rule and ALL apartment access rules unless explicitly overridden by a high-priority driver detailed in your reasoning.
+5.  **Reflect on Emotional Change:** Briefly note if this decision process or chosen action is likely to change your current emotional state.
 
 Your response MUST be structured in the following YAML-like format. Provide a value for each key. Use "N/A", "none", or be descriptive as appropriate.
 
 ```yaml
 priority_analysis:
-  dialogue_driven: Yes/No # Did dialogue/player request primarily drive THIS SPECIFIC action?
-  schedule_driven: Yes/No # Was schedule the main driver for THIS SPECIFIC action?
-  emotion_driven: Yes/No  # Was emotion the main driver for THIS SPECIFIC action?
-  memory_driven: Yes/No   # Did a long-term memory significantly influence THIS SPECIFIC action?
-  exploration_driven: Yes/No # Is this primarily an exploration or default routine action?
+  dialogue_driven: Yes/No
+  schedule_driven: Yes/No
+  emotion_driven: Yes/No
+  memory_driven: Yes/No
+  access_rules_consideration: Yes/No # Did apartment access rules significantly affect your choice?
+  exploration_driven: Yes/No
 reasoning: |
-  [Your step-by-step thought process explaining your decision and prioritization. Be clear and concise, max 3-5 sentences. For example: "Player asked me to go to the park, which sounds pleasant. My schedule is free. I'm feeling neutral, so a walk in the park is fine. Therefore, I will go to the park coordinates."]
-chosen_action: "[Short, in-character phrase describing your action. e.g., 'Alright, let's head to the Park coordinates the player suggested!', 'I should probably check on my stall at the market now.', 'Feeling a bit restless, I'll explore the area near the old mill.', 'I recall promising to visit the library today; I should do that.']"
-target_coordinates: "x=<float_value>, y=<float_value>" # e.g., "x=123.4, y=56.7"
-resulting_emotion_tag: "[Your primary emotional tag after this decision, e.g., 'neutral', 'content', 'slightly_anxious', 'curious', 'pleased'. Use 'no_change' if your emotion is stable or unaffected by this specific decision.]"
-""")
+  [Your step-by-step thought process explaining your decision and prioritization. Max 3-5 sentences.]
+chosen_action: "[Short, in-character phrase describing your action.]"
+target_coordinates: "x=<float_value>, y=<float_value>"
+resulting_emotion_tag: "[Your primary emotional tag after this decision. Use 'no_change' if stable.]"
+```""")
     final_prompt = "\n".join(prompt_components)
     logger.debug(
         f"Built NPC movement prompt for {npc_info.npc_id} (Personality: {personality_description[:30]}...). "
         f"Prompt length: {len(final_prompt)} chars."
     )
-    # For very long prompts, you might want to log only a portion or a hash for brevity in production logs
-    # if len(final_prompt) > 3000: # Example limit
-    #     logger.debug(f"Prompt Preview (first 500, last 200): {final_prompt[:500]}...{final_prompt[-200:]}")
-    # else:
-    #     logger.debug(f"Full Prompt: {final_prompt}")
-        
     return final_prompt
-
-
