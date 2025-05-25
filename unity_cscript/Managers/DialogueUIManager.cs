@@ -2,8 +2,8 @@
 // 放置路徑建議: Assets/Scripts/Managers/DialogueUIManager.cs
 
 using UnityEngine;
-using UnityEngine.UI; // For basic UI Text
-using TMPro;          // For TextMeshPro - uncomment if you use it
+// using UnityEngine.UI; // For basic UI Text - No longer primary if using TMP
+using TMPro;          // For TextMeshPro
 using System.Collections; // For IEnumerator
 
 /// <summary>
@@ -15,18 +15,18 @@ public class DialogueUIManager : MonoBehaviour
 {
     [Header("UI Element References")]
     [Tooltip("Assign a UI Text or TextMeshProUGUI element for displaying the speaker's name.")]
-    public Text speakerNameText; // For Unity UI Text
-    // public TMP_Text speakerNameTextMeshPro; // Uncomment and use if using TextMeshPro
+    // public Text speakerNameText; // For Unity UI Text - Commented out
+    public TMP_Text speakerNameTextMeshPro; // Using TextMeshPro
 
     [Tooltip("Assign a UI Text or TextMeshProUGUI element for displaying the dialogue content.")]
-    public Text dialogueContentText; // For Unity UI Text
-    // public TMP_Text dialogueContentTextMeshPro; // Uncomment and use if using TextMeshPro
+    // public Text dialogueContentText; // For Unity UI Text - Commented out
+    public TMP_Text dialogueContentTextMeshPro; // Using TextMeshPro
 
     [Tooltip("The parent GameObject of the dialogue UI panel. This will be toggled for visibility.")]
     public GameObject dialoguePanel; // Assign the root Panel of your dialogue UI
 
     [Header("Dialogue Display Settings")]
-    [Tooltip("Default duration (in seconds) to display a dialogue line if no specific duration is given. 0 or less means it stays until HideDialogue() is called.")]
+    [Tooltip("Default duration (in seconds) to display a dialogue line if no specific duration is given. 0 or less means it stays until HideDialogue() is called explicitly.")]
     public float defaultDisplayDuration = 4.0f;
 
     // Singleton pattern for easy global access
@@ -64,10 +64,10 @@ public class DialogueUIManager : MonoBehaviour
         // Basic validation of UI references
         if (dialoguePanel == null)
             Debug.LogError("[DialogueUIManager] Dialogue Panel is not assigned in the Inspector!", this);
-        if (speakerNameText == null /* && speakerNameTextMeshPro == null */) // Adjust if using TMP
-            Debug.LogError("[DialogueUIManager] Speaker Name Text (or TMP Text) is not assigned!", this);
-        if (dialogueContentText == null /* && dialogueContentTextMeshPro == null */) // Adjust if using TMP
-            Debug.LogError("[DialogueUIManager] Dialogue Content Text (or TMP Text) is not assigned!", this);
+        if (speakerNameTextMeshPro == null)
+            Debug.LogError("[DialogueUIManager] Speaker Name TextMeshPro is not assigned!", this);
+        if (dialogueContentTextMeshPro == null)
+            Debug.LogError("[DialogueUIManager] Dialogue Content TextMeshPro is not assigned!", this);
         
         HideDialogueInternal(); // Start with dialogue panel hidden
     }
@@ -81,7 +81,7 @@ public class DialogueUIManager : MonoBehaviour
     /// If 0 or negative, uses defaultDisplayDuration (if positive) or stays until HideDialogue() is called explicitly.</param>
     public void ShowDialogue(string speakerName, string message, float duration = -1f)
     {
-        if (dialoguePanel == null || (speakerNameText == null /* && speakerNameTextMeshPro == null */) || (dialogueContentText == null /* && dialogueContentTextMeshPro == null */))
+        if (dialoguePanel == null || speakerNameTextMeshPro == null || dialogueContentTextMeshPro == null)
         {
             Debug.LogWarning($"[DialogueUIManager] Cannot show dialogue due to missing UI references. Speaker: {speakerName}, Msg: {message?.Substring(0, Mathf.Min(message?.Length ?? 0, 50))}...");
             return;
@@ -89,13 +89,11 @@ public class DialogueUIManager : MonoBehaviour
 
         Debug.Log($"<color=#DDA0DD>[UI DIALOGUE] Speaker: '{speakerName}' Says: \"{message}\"</color>"); // Plum color
 
-        // Set text for speaker name (choose one based on what you assigned)
-        if (speakerNameText != null) speakerNameText.text = speakerName;
-        // else if (speakerNameTextMeshPro != null) speakerNameTextMeshPro.text = speakerName;
+        // Set text for speaker name
+        if (speakerNameTextMeshPro != null) speakerNameTextMeshPro.text = speakerName;
 
         // Set text for dialogue content
-        if (dialogueContentText != null) dialogueContentText.text = message;
-        // else if (dialogueContentTextMeshPro != null) dialogueContentTextMeshPro.text = message;
+        if (dialogueContentTextMeshPro != null) dialogueContentTextMeshPro.text = message;
         
         dialoguePanel.SetActive(true);
 
