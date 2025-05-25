@@ -1,0 +1,31 @@
+# npc_api_suite/requirements.txt
+
+# FastAPI framework and Uvicorn server
+fastapi>=0.109.0,<0.112.0 # 保持在一個較新的穩定版本範圍內 (截至2025年初)
+uvicorn[standard]>=0.27.0,<0.30.0 # [standard] 包含額外的依賴如 websockets, httptools
+
+# Pydantic for data validation and settings management
+pydantic>=2.5.0,<2.8.0 # 使用 Pydantic V2
+pydantic-settings>=2.1.0,<2.4.0 # 用於從環境變數載入設定
+
+# Ollama client library
+ollama>=0.1.8,<0.3.0 # 根據您使用的 Ollama Python 函式庫版本 (請檢查最新穩定版)
+
+# Asynchronous file I/O
+aiofiles>=23.1.0,<24.0.0 # 用於 NPCMemoryService 中的異步檔案讀寫
+
+# For loading .env files (used by pydantic-settings)
+python-dotenv>=1.0.0,<1.1.0
+
+# For parsing YAML-like output from LLM (in movement_service.py)
+PyYAML>=6.0,<6.1 # YAML 解析器
+
+# Optional: For advanced scheduling if NPC_MEMORY_AUTO_SAVE_INTERVAL_SECONDS is implemented
+# apscheduler>=3.10.0,<4.0.0
+# fastapi-scheduler>=0.4.0,<0.5.0 # (Note: check compatibility with your FastAPI version)
+
+# Optional: For structured logging in JSON format
+# python-json-logger>=2.0.7,<2.1.0
+
+# Optional: For improved error tracking in production (e.g., Sentry)
+# sentry-sdk[fastapi]>=1.40.0,<2.0.0
