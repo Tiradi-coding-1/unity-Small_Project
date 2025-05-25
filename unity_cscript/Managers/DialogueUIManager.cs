@@ -1,32 +1,34 @@
+// 檔案名稱: tiradi-coding-1/unity-small_project/unity-Small_Project-ec8a534c2acd0effbb69c32bc060ff9194dcfba1/unity_cscript/Managers/DialogueUIManager.cs
 // DialogueUIManager.cs
 // 放置路徑建議: Assets/Scripts/Managers/DialogueUIManager.cs
 
 using UnityEngine;
-// using UnityEngine.UI; // For basic UI Text - No longer primary if using TMP
-using TMPro;          // For TextMeshPro
+using UnityEngine.UI; // For basic UI Text (保留以防舊UI元素仍在使用)
+using TMPro;          // For TextMeshPro - 如果此管理器也升級到TMP
 using System.Collections; // For IEnumerator
 
 /// <summary>
-/// Manages the display of dialogue in the game's UI.
-/// This is a basic example; a real system would be more complex with features like
-/// character portraits, dialogue choices, typing effects, etc.
+/// Manages the display of dialogue in a global game UI panel.
+/// NOTE: With the introduction of NPC-specific dialogue bubbles, this manager's role
+/// might be reduced to displaying system messages, narrator lines, or as a fallback
+/// if an NPC cannot display its own bubble.
 /// </summary>
 public class DialogueUIManager : MonoBehaviour
 {
-    [Header("UI Element References")]
-    [Tooltip("Assign a UI Text or TextMeshProUGUI element for displaying the speaker's name.")]
-    // public Text speakerNameText; // For Unity UI Text - Commented out
-    public TMP_Text speakerNameTextMeshPro; // Using TextMeshPro
+    [Header("UI Element References (Global Panel)")]
+    [Tooltip("全域對話面板的父 GameObject。將被切換以控制可見性。")]
+    public GameObject dialoguePanel; // Assign the root Panel of your global dialogue UI
 
-    [Tooltip("Assign a UI Text or TextMeshProUGUI element for displaying the dialogue content.")]
-    // public Text dialogueContentText; // For Unity UI Text - Commented out
-    public TMP_Text dialogueContentTextMeshPro; // Using TextMeshPro
+    [Tooltip("（可選）用於顯示說話者名稱的 UI Text 或 TextMeshProUGUI 元素。")]
+    public Text speakerNameText; // For Unity UI Text
+    public TMP_Text speakerNameTextMeshPro; // For TextMeshPro
 
-    [Tooltip("The parent GameObject of the dialogue UI panel. This will be toggled for visibility.")]
-    public GameObject dialoguePanel; // Assign the root Panel of your dialogue UI
+    [Tooltip("（可選）用於顯示對話內容的 UI Text 或 TextMeshProUGUI 元素。")]
+    public Text dialogueContentText; // For Unity UI Text
+    public TMP_Text dialogueContentTextMeshPro; // For TextMeshPro
 
     [Header("Dialogue Display Settings")]
-    [Tooltip("Default duration (in seconds) to display a dialogue line if no specific duration is given. 0 or less means it stays until HideDialogue() is called explicitly.")]
+    [Tooltip("如果未給定特定持續時間，則顯示對話行的預設持續時間（秒）。0 或更小表示保持顯示，直到明確調用 HideDialogue()。")]
     public float defaultDisplayDuration = 4.0f;
 
     // Singleton pattern for easy global access
@@ -50,6 +52,8 @@ public class DialogueUIManager : MonoBehaviour
         }
     }
 
+    private Coroutine _hidePanelCoroutine; // 用於自動隱藏全域面板的協程
+
     void Awake()
     {
         if (_instance != null && _instance != this)
@@ -61,56 +65,71 @@ public class DialogueUIManager : MonoBehaviour
         _instance = this;
         // DontDestroyOnLoad(gameObject); // Optional
 
-        // Basic validation of UI references
-        if (dialoguePanel == null)
-            Debug.LogError("[DialogueUIManager] Dialogue Panel is not assigned in the Inspector!", this);
-        if (speakerNameTextMeshPro == null)
-            Debug.LogError("[DialogueUIManager] Speaker Name TextMeshPro is not assigned!", this);
-        if (dialogueContentTextMeshPro == null)
-            Debug.LogError("[DialogueUIManager] Dialogue Content TextMeshPro is not assigned!", this);
-        
-        HideDialogueInternal(); // Start with dialogue panel hidden
+        // 基礎 UI 引用驗證 (如果 dialoguePanel 被指定)
+        if (dialoguePanel != null)
+        {
+            if (speakerNameText == null && speakerNameTextMeshPro == null)
+                Debug.LogWarning("[DialogueUIManager] Speaker Name Text (or TMP Text) for global panel is not assigned. Name display might not work.", this);
+            if (dialogueContentText == null && dialogueContentTextMeshPro == null)
+                Debug.LogWarning("[DialogueUIManager] Dialogue Content Text (or TMP Text) for global panel is not assigned. Content display might not work.", this);
+            
+            HideDialogueInternal(); // 預設隱藏對話面板
+        }
+        else
+        {
+            Debug.Log("[DialogueUIManager] Global Dialogue Panel is not assigned. This manager will only function if panel is assigned at runtime or if methods are used by other UIs.", this);
+        }
     }
 
     /// <summary>
-    /// Displays a line of dialogue in the UI.
+    /// 在全域UI面板中顯示一行對話。
     /// </summary>
-    /// <param name="speakerName">The name of the character speaking.</param>
-    /// <param name="message">The dialogue message to display.</param>
-    /// <param name="duration">Optional: How long (in seconds) to display the message before auto-hiding.
-    /// If 0 or negative, uses defaultDisplayDuration (if positive) or stays until HideDialogue() is called explicitly.</param>
+    /// <param name="speakerName">說話者的名稱。</param>
+    /// <param name="message">要顯示的對話訊息。</param>
+    /// <param name="duration">可選：顯示訊息的時長（秒）。
+    /// 如果為0或負數，則使用 defaultDisplayDuration（如果為正），或保持顯示直到 HideDialogue() 被調用。</param>
     public void ShowDialogue(string speakerName, string message, float duration = -1f)
     {
-        if (dialoguePanel == null || speakerNameTextMeshPro == null || dialogueContentTextMeshPro == null)
+        if (dialoguePanel == null)
         {
-            Debug.LogWarning($"[DialogueUIManager] Cannot show dialogue due to missing UI references. Speaker: {speakerName}, Msg: {message?.Substring(0, Mathf.Min(message?.Length ?? 0, 50))}...");
+            Debug.LogWarning($"[DialogueUIManager] Cannot show dialogue in global panel because Dialogue Panel is not assigned. Speaker: {speakerName}, Msg: {message?.Substring(0, Mathf.Min(message?.Length ?? 0, 50))}...");
             return;
         }
+         if ((speakerNameText == null && speakerNameTextMeshPro == null) || (dialogueContentText == null && dialogueContentTextMeshPro == null ))
+        {
+             Debug.LogWarning($"[DialogueUIManager] Cannot show dialogue in global panel due to missing text UI references. Speaker: {speakerName}, Msg: {message?.Substring(0, Mathf.Min(message?.Length ?? 0, 50))}...");
+        }
 
-        Debug.Log($"<color=#DDA0DD>[UI DIALOGUE] Speaker: '{speakerName}' Says: \"{message}\"</color>"); // Plum color
 
-        // Set text for speaker name
+        // Debug.Log($"<color=#E6E6FA>[UI DIALOGUE - Global Panel] Speaker: '{speakerName}' Says: \"{message}\"</color>"); // Lavender color
+
+        // 設定說話者名稱
         if (speakerNameTextMeshPro != null) speakerNameTextMeshPro.text = speakerName;
+        else if (speakerNameText != null) speakerNameText.text = speakerName;
 
-        // Set text for dialogue content
+        // 設定對話內容
         if (dialogueContentTextMeshPro != null) dialogueContentTextMeshPro.text = message;
+        else if (dialogueContentText != null) dialogueContentText.text = message;
         
         dialoguePanel.SetActive(true);
 
-        // Stop any previously running auto-hide coroutine to prevent premature hiding
-        StopAllCoroutines(); 
+        // 停止任何先前運行的自動隱藏協程
+        if (_hidePanelCoroutine != null)
+        {
+            StopCoroutine(_hidePanelCoroutine);
+            _hidePanelCoroutine = null;
+        }
 
         float displayDuration = (duration < 0) ? defaultDisplayDuration : duration;
 
         if (displayDuration > 0)
         {
-            StartCoroutine(HideDialogueAfterDelayCoroutine(displayDuration));
+            _hidePanelCoroutine = StartCoroutine(HideDialogueAfterDelayCoroutine(displayDuration));
         }
-        // If displayDuration is 0 or less, dialogue remains visible until HideDialogue() is called.
     }
 
     /// <summary>
-    /// Hides the dialogue panel immediately.
+    /// 立即隱藏全域對話面板。
     /// </summary>
     public void HideDialogue()
     {
@@ -119,13 +138,15 @@ public class DialogueUIManager : MonoBehaviour
 
     private void HideDialogueInternal()
     {
-        if (dialoguePanel != null)
+        if (dialoguePanel != null && dialoguePanel.activeSelf)
         {
-            if(dialoguePanel.activeSelf) // Only log if it was actually active and is now being hidden
-            {
-                // Debug.Log("[DialogueUIManager] Hiding dialogue panel.");
-            }
             dialoguePanel.SetActive(false);
+            // Debug.Log("[DialogueUIManager] Global dialogue panel hidden.");
+        }
+        if (_hidePanelCoroutine != null) // 確保協程也被停止
+        {
+            StopCoroutine(_hidePanelCoroutine);
+            _hidePanelCoroutine = null;
         }
     }
 
@@ -133,11 +154,13 @@ public class DialogueUIManager : MonoBehaviour
     {
         yield return new WaitForSeconds(delay);
         HideDialogueInternal();
+        _hidePanelCoroutine = null;
     }
 
-
-    // Example Test method that can be called via a UI button or another script for testing the UI
-    [ContextMenu("Test Show Dialogue")] // Allows right-clicking component in Inspector to run this
+    /// <summary>
+    /// 測試方法，可通過 UI 按鈕或其他腳本調用以測試全域 UI。
+    /// </summary>
+    [ContextMenu("Test Show Global Dialogue")] 
     public void TestShowSampleDialogue()
     {
         if (!Application.isPlaying)
@@ -145,9 +168,14 @@ public class DialogueUIManager : MonoBehaviour
             Debug.LogWarning("TestShowSampleDialogue can only be run in Play Mode.");
             return;
         }
-        if (gameObject.activeInHierarchy)
+        if (dialoguePanel == null)
         {
-           ShowDialogue("Test Narrator", "This is a sample dialogue message. It will disappear after the default duration or if a specific duration is passed.", 5f);
+             Debug.LogError("[DialogueUIManager] Cannot run test: Dialogue Panel is not assigned in the Inspector!");
+             return;
+        }
+        if (gameObject.activeInHierarchy) // 確保管理器本身是活動的
+        {
+           ShowDialogue("System Announcer", "This is a sample dialogue message displayed in the global UI panel. It will disappear after the specified or default duration.", 5f);
         }
         else
         {

@@ -9,26 +9,25 @@ using NpcApiModels;
 
 /// <summary>
 /// Manages and provides contextual information about the current game scene,
-/// such as lists of nearby characters, visible landmarks, and scene boundaries.
-/// It can dynamically find relevant GameObjects with CharacterData or LandmarkDataComponent.
+/// such as lists of nearby characters, visible landmarks (including rooms and their contents), 
+/// and scene boundaries.
 /// </summary>
 public class SceneContextManager : MonoBehaviour
 {
     [Header("Scene Configuration")]
-    [Tooltip("一個 Collider2D (例如，一個大的 BoxCollider2D 或 PolygonCollider2D)，用於定義當前可遊玩場景區域的整體可通行邊界。對於公寓場景，這應該精確描繪公寓的牆壁範圍。")]
+    [Tooltip("一個 Collider2D，用於定義當前可遊玩場景區域的整體可通行邊界。")]
     public Collider2D mainSceneBoundsCollider;
 
-    [Tooltip("對當前場景或區域的通用文字描述，例如：'一個有四個臥室的合租公寓內部' 或 '一個繁忙的客廳區域'。這可以作為某些 API 呼叫的全域上下文。")]
-    public string generalSceneDescription = "一個公寓內部。"; // Modified default for apartment
+    [Tooltip("對當前場景或區域的通用文字描述，例如：'一個合租公寓的內部'。")]
+    public string generalSceneDescription = "一個合租公寓的內部。"; // Updated default
 
-    // 為了效能而快取的角色和地標列表。
-    // 這些列表可以在場景發生重大變化時定期更新或手動刷新。
+    // 快取的列表
     private List<CharacterData> _allCharactersInScene = new List<CharacterData>();
-    private List<LandmarkDataComponent> _allLandmarksInScene = new List<LandmarkDataComponent>();
+    private List<LandmarkDataComponent> _allIndividualLandmarksInScene = new List<LandmarkDataComponent>();
+    private List<RoomDataComponent> _allRoomsInScene = new List<RoomDataComponent>(); // 新增：快取所有房間
     private bool _isCacheInitialized = false;
 
-
-    // Singleton pattern for easy global access
+    // Singleton pattern
     private static SceneContextManager _instance;
     public static SceneContextManager Instance
     {
@@ -58,42 +57,40 @@ public class SceneContextManager : MonoBehaviour
             return;
         }
         _instance = this;
-        // DontDestroyOnLoad(gameObject); // Optional: if this manager should persist across scene loads
 
         if (mainSceneBoundsCollider == null)
         {
-            Debug.LogWarning("[SceneContextManager] Main Scene Bounds Collider is not assigned. " +
-                             "Boundary information will use large default values. This is critical for an apartment scene!", this);
+            Debug.LogWarning("[SceneContextManager] Main Scene Bounds Collider is not assigned. Boundary info will be default.", this);
         }
     }
 
     void Start()
     {
-        // Initialize the cache of characters and landmarks
         RefreshSceneCache();
     }
 
     /// <summary>
-    /// Re-scans the scene for all CharacterData and LandmarkDataComponent instances.
-    /// Call this if new characters/landmarks are dynamically added or removed during gameplay,
-    /// or if their static data that this manager might cache changes (though landmark status should be dynamic).
+    /// 重新掃描場景以獲取所有 CharacterData, LandmarkDataComponent, 和 RoomDataComponent 實例。
     /// </summary>
     public void RefreshSceneCache()
     {
-        _allCharactersInScene = FindObjectsOfType<CharacterData>().Where(cd => cd.enabled && cd.gameObject.activeInHierarchy).ToList();
-        _allLandmarksInScene = FindObjectsOfType<LandmarkDataComponent>().Where(ldc => ldc.enabled && ldc.gameObject.activeInHierarchy).ToList();
+        _allCharactersInScene = FindObjectsOfType<CharacterData>()
+                                .Where(cd => cd.enabled && cd.gameObject.activeInHierarchy).ToList();
+        _allIndividualLandmarksInScene = FindObjectsOfType<LandmarkDataComponent>()
+                                .Where(ldc => ldc.enabled && ldc.gameObject.activeInHierarchy).ToList();
+        _allRoomsInScene = FindObjectsOfType<RoomDataComponent>()
+                                .Where(rdc => rdc.enabled && rdc.gameObject.activeInHierarchy).ToList(); // 查找並快取 RoomDataComponent
+        
         _isCacheInitialized = true;
-        Debug.Log($"[SceneContextManager] Cache refreshed. Found {_allCharactersInScene.Count} active characters and {_allLandmarksInScene.Count} active landmarks.");
+        Debug.Log($"[SceneContextManager] Cache refreshed. Found: " +
+                  $"{_allCharactersInScene.Count} active characters, " +
+                  $"{_allIndividualLandmarksInScene.Count} active individual landmarks, " +
+                  $"{_allRoomsInScene.Count} active rooms.");
     }
 
-
     /// <summary>
-    /// Gets a list of EntityContextInfo for characters (NPCs/Player) near a given center point.
+    /// 獲取附近實體的列表。
     /// </summary>
-    /// <param name="requestingNpcId">發出請求的 NPC 的 ID，用於排除自身並判斷關係。</param>
-    /// <param name="centerPosition">搜索的中心點。</param>
-    /// <param name="searchRadius">搜索半徑。</param>
-    /// <returns>附近實體的列表。</returns>
     public List<EntityContextInfo> GetNearbyEntities(string requestingNpcId, Vector3 centerPosition, float searchRadius)
     {
         if (!_isCacheInitialized) RefreshSceneCache(); 
@@ -103,8 +100,7 @@ public class SceneContextManager : MonoBehaviour
 
         foreach (CharacterData charData in _allCharactersInScene)
         {
-            if (charData == null) continue; // Should be filtered by RefreshSceneCache if not enabled/active
-            if (charData.npcId == requestingNpcId) continue; // Skip self
+            if (charData.npcId == requestingNpcId) continue; 
 
             if ((charData.transform.position - centerPosition).sqrMagnitude <= searchRadiusSqr)
             {
@@ -121,36 +117,69 @@ public class SceneContextManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Gets a list of LandmarkContextInfo for landmarks visible or relevant from a given center point.
-    /// This method now relies on LandmarkDataComponent.ToLandmarkContextInfo() to provide up-to-date status.
+    /// 獲取可見地標的列表，現在會整合房間資訊和獨立地標資訊。
     /// </summary>
-    /// <param name="centerPosition">搜索的中心點。</param>
-    /// <param name="visibilityRadius">可見半徑。</param>
-    /// <returns>可見地標的列表，包含其最新狀態。</returns>
     public List<LandmarkContextInfo> GetVisibleLandmarks(Vector3 centerPosition, float visibilityRadius)
     {
         if (!_isCacheInitialized) RefreshSceneCache();
 
         List<LandmarkContextInfo> visibleLandmarks = new List<LandmarkContextInfo>();
         float visibilityRadiusSqr = visibilityRadius * visibilityRadius;
+        HashSet<string> addedLandmarkNames = new HashSet<string>(); // 用於避免重複添加同名地標
 
-        foreach (LandmarkDataComponent landmarkData in _allLandmarksInScene)
+        // 1. 處理房間 (RoomDataComponent)
+        foreach (RoomDataComponent roomData in _allRoomsInScene)
         {
-            if (landmarkData == null) continue; // Should be filtered by RefreshSceneCache
+            if (roomData == null) continue;
 
-            if ((landmarkData.transform.position - centerPosition).sqrMagnitude <= visibilityRadiusSqr)
+            // 判斷房間是否可見 (例如，NPC 是否在房間內，或房間的中心點是否在可見半徑內)
+            // 一個簡單的判斷是基於房間中心點的距離
+            Vector3 roomCenter = roomData.roomBoundsCollider != null ? roomData.roomBoundsCollider.bounds.center : roomData.transform.position;
+            if ((roomCenter - centerPosition).sqrMagnitude <= visibilityRadiusSqr)
             {
-                // ToLandmarkContextInfo() in the modified LandmarkDataComponent now includes dynamic status
-                visibleLandmarks.Add(landmarkData.ToLandmarkContextInfo());
+                LandmarkContextInfo roomAsLandmark = roomData.ToRoomAsLandmarkContextInfo();
+                if (!addedLandmarkNames.Contains(roomAsLandmark.landmark_name))
+                {
+                    visibleLandmarks.Add(roomAsLandmark);
+                    addedLandmarkNames.Add(roomAsLandmark.landmark_name);
+                }
             }
         }
+
+        // 2. 處理獨立的地標物件 (LandmarkDataComponent)
+        //    這些可能是房間外的地標，或者是房間內需要單獨精確標識的物件（即使它們已在房間描述中提及）
+        foreach (LandmarkDataComponent landmarkData in _allIndividualLandmarksInScene)
+        {
+            if (landmarkData == null) continue;
+
+            // 如果一個 LandmarkDataComponent 所在的 GameObject 已經有一個 RoomDataComponent，
+            // 那麼這個房間的資訊已經透過上面的循環處理了。
+            // 我們主要關心那些不是房間本身，而是具體物品或其他獨立地標的 LandmarkDataComponent。
+            // 這裡我們簡單地添加所有可見的獨立地標。如果 LLM 提示設計得好，它可以處理一定程度的資訊冗餘。
+            // （例如，房間的 notes 提到了沙發，同時沙發本身也是一個獨立地標）
+            if ((landmarkData.transform.position - centerPosition).sqrMagnitude <= visibilityRadiusSqr)
+            {
+                // 檢查是否已經作為 RoomDataComponent 添加過同名的主要地標
+                // 這是一個簡化處理，如果 LandmarkDataComponent 掛載在 RoomDataComponent 同一個 GameObject 上，
+                // 且 landmarkName 相同，則可能重複。更好的做法是確保 RoomDataComponent 和 LandmarkDataComponent
+                // 在同一個 GameObject 上時，它們的 landmarkName/roomName 是獨特的，或者有不同的 typeTag。
+                // RoomDataComponent.ToRoomAsLandmarkContextInfo() 使用的是 roomName。
+                if (!addedLandmarkNames.Contains(landmarkData.landmarkName))
+                {
+                    visibleLandmarks.Add(landmarkData.ToLandmarkContextInfo());
+                    addedLandmarkNames.Add(landmarkData.landmarkName);
+                }
+                // 如果允許物品同時作為房間內容描述和獨立地標出現，可以移除 !addedLandmarkNames.Contains 的檢查，
+                // 但需確保 LLM 能正確處理。目前保留此檢查以避免日誌中出現看似重複的條目。
+            }
+        }
+        // Debug.Log($"[SceneContextManager] GetVisibleLandmarks found {visibleLandmarks.Count} items for API.");
         return visibleLandmarks;
     }
 
     /// <summary>
-    /// Gets the SceneBoundaryInfo based on the mainSceneBoundsCollider.
+    /// 獲取場景邊界資訊。
     /// </summary>
-    /// <returns>場景邊界資訊。</returns>
     public SceneBoundaryInfo GetCurrentSceneBoundaries()
     {
         if (mainSceneBoundsCollider != null && mainSceneBoundsCollider.enabled)
@@ -166,33 +195,34 @@ public class SceneContextManager : MonoBehaviour
         }
         else
         {
-            Debug.LogWarning("[SceneContextManager] Main Scene Bounds Collider not set or disabled. " +
-                             "Returning very large default boundaries. This might lead to NPCs trying to move outside the intended apartment area.");
+            Debug.LogWarning("[SceneContextManager] Main Scene Bounds Collider not set or disabled. Returning large default boundaries.");
             return new SceneBoundaryInfo { min_x = -1000f, max_x = 1000f, min_y = -1000f, max_y = 1000f };
         }
     }
 
     /// <summary>
-    /// Gets a general textual description of the current scene.
-    /// This should be set in the Inspector to reflect the apartment setting.
+    /// 獲取場景的通用描述。
     /// </summary>
-    /// <returns>場景的通用描述。</returns>
     public string GetGeneralSceneDescription()
     {
         return string.IsNullOrEmpty(generalSceneDescription) ? "An apartment interior." : generalSceneDescription;
     }
 
     /// <summary>
-    /// 新增：提供對快取的 LandmarkDataComponent 列表的訪問。
-    /// 這允許其他系統（如 NpcController）有效地查詢地標，而無需重複 FindObjectsOfType。
+    /// 提供對快取的獨立 LandmarkDataComponent 列表的訪問。
     /// </summary>
-    /// <returns>場景中所有活動 LandmarkDataComponent 的列表副本。</returns>
-    public List<LandmarkDataComponent> GetAllLandmarkDataComponents()
+    public List<LandmarkDataComponent> GetAllIndividualLandmarkDataComponents()
     {
-        if (!_isCacheInitialized)
-        {
-            RefreshSceneCache(); // 確保快取已初始化
-        }
-        return new List<LandmarkDataComponent>(_allLandmarksInScene); // 返回副本以避免外部修改
+        if (!_isCacheInitialized) RefreshSceneCache();
+        return new List<LandmarkDataComponent>(_allIndividualLandmarksInScene); 
+    }
+    
+    /// <summary>
+    /// 新增：提供對快取的 RoomDataComponent 列表的訪問。
+    /// </summary>
+    public List<RoomDataComponent> GetAllRoomDataComponents()
+    {
+        if (!_isCacheInitialized) RefreshSceneCache();
+        return new List<RoomDataComponent>(_allRoomsInScene);
     }
 }

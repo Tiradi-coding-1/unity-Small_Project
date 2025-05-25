@@ -4,6 +4,7 @@
 
 using UnityEngine;
 using System.Collections.Generic; // For List
+using System.Linq; // For Distinct() if needed
 using NpcApiModels; // 引用我們在 NpcApiDataModels.cs 中定義的命名空間
 
 /// <summary>
@@ -21,7 +22,7 @@ public class LandmarkDataComponent : MonoBehaviour
     public string landmarkTypeTag = "generic_point_of_interest";
 
     [Tooltip("此地標的擁有者 NPC ID (例如，如果是私人房間，則為房間主人的 NPC ID)。如果無特定擁有者則留空。")]
-    public string ownerNpcId = ""; // Should match an npcId from a CharacterData component
+    public string ownerNpcId = "";
 
     [Header("Landmark Context & Status")]
     [TextArea(2, 5)]
@@ -45,18 +46,15 @@ public class LandmarkDataComponent : MonoBehaviour
 
         if (string.IsNullOrEmpty(landmarkTypeTag))
         {
-            // 確保有一個預設的類型標籤，以防止 API 期望有值時出現 null/空字串。
             landmarkTypeTag = "generic_point_of_interest";
-            // Debug.LogWarning($"LandmarkDataComponent on '{gameObject.name}' had an empty 'Landmark Type Tag'. Defaulted to 'generic_point_of_interest'. " +
-            //                  "It's highly recommended to set a more descriptive tag.", this);
         }
     }
 
     void Awake()
     {
-        // 在遊戲開始時，可以根據需要從 initialStaticNotes 初始化 _dynamicStatusNotes
-        // 或者，如果 initialStaticNotes 確實只包含純靜態描述，則 _dynamicStatusNotes 從空列表開始。
-        // 目前的設計是 initialStaticNotes 為純靜態描述，_dynamicStatusNotes 儲存可變狀態。
+        // _dynamicStatusNotes is initialized as an empty list.
+        // Any initial dynamic states would be set by other scripts during their Awake/Start
+        // or in response to game events.
     }
 
     /// <summary>
@@ -67,18 +65,23 @@ public class LandmarkDataComponent : MonoBehaviour
     /// <param name="newNoteFull">新的完整狀態 (例如 "occupancy_occupied" 或 "occupancy_vacant")。如果為空或null，則只移除舊狀態。</param>
     public void UpdateDynamicStatusByPrefix(string notePrefixToRemove, string newNoteFull)
     {
+        bool changed = false;
         // 先移除所有以此前綴開頭的舊狀態
-        _dynamicStatusNotes.RemoveAll(note => note.StartsWith(notePrefixToRemove));
+        int removedCount = _dynamicStatusNotes.RemoveAll(note => note.StartsWith(notePrefixToRemove));
+        if (removedCount > 0) changed = true;
         
         // 如果新狀態有效，則添加它
         if (!string.IsNullOrEmpty(newNoteFull))
         {
-            _dynamicStatusNotes.Add(newNoteFull);
-            // Debug.Log($"[{landmarkName}] Status updated: Added '{newNoteFull}', Removed notes starting with '{notePrefixToRemove}'. Current dynamic notes: {string.Join(", ", _dynamicStatusNotes)}");
+            if (!_dynamicStatusNotes.Contains(newNoteFull)) // 避免重複添加相同的完整狀態
+            {
+                _dynamicStatusNotes.Add(newNoteFull);
+                changed = true;
+            }
         }
-        // else
+        // if (changed)
         // {
-            // Debug.Log($"[{landmarkName}] Status update: Removed notes starting with '{notePrefixToRemove}'. Current dynamic notes: {string.Join(", ", _dynamicStatusNotes)}");
+        //     Debug.Log($"[{landmarkName}-{gameObject.GetInstanceID()}] Status updated with prefix '{notePrefixToRemove}'. New full note: '{newNoteFull ?? "NONE"}'. Current dynamic notes: {string.Join(", ", _dynamicStatusNotes)}");
         // }
     }
 
@@ -92,7 +95,7 @@ public class LandmarkDataComponent : MonoBehaviour
         if (!string.IsNullOrEmpty(note) && !_dynamicStatusNotes.Contains(note))
         {
             _dynamicStatusNotes.Add(note);
-            // Debug.Log($"[{landmarkName}] Status added: '{note}'. Current dynamic notes: {string.Join(", ", _dynamicStatusNotes)}");
+            // Debug.Log($"[{landmarkName}-{gameObject.GetInstanceID()}] Status added: '{note}'. Current dynamic notes: {string.Join(", ", _dynamicStatusNotes)}");
         }
     }
 
@@ -105,7 +108,7 @@ public class LandmarkDataComponent : MonoBehaviour
         if (_dynamicStatusNotes.Contains(note))
         {
             _dynamicStatusNotes.Remove(note);
-            // Debug.Log($"[{landmarkName}] Status removed: '{note}'. Current dynamic notes: {string.Join(", ", _dynamicStatusNotes)}");
+            // Debug.Log($"[{landmarkName}-{gameObject.GetInstanceID()}] Status removed: '{note}'. Current dynamic notes: {string.Join(", ", _dynamicStatusNotes)}");
         }
     }
 
@@ -116,6 +119,7 @@ public class LandmarkDataComponent : MonoBehaviour
     /// <returns>如果存在則返回 true，否則返回 false。</returns>
     public bool HasDynamicStatus(string note)
     {
+        if (string.IsNullOrEmpty(note)) return false;
         return _dynamicStatusNotes.Contains(note);
     }
     
@@ -152,19 +156,16 @@ public class LandmarkDataComponent : MonoBehaviour
             y = transform.position.y
         };
 
-        // 合併靜態初始筆記和動態狀態筆記
         List<string> combinedNotes = new List<string>();
         if (initialStaticNotes != null)
         {
             combinedNotes.AddRange(initialStaticNotes);
         }
-        if (_dynamicStatusNotes != null) // _dynamicStatusNotes is initialized in Awake/constructor
-        {
-            combinedNotes.AddRange(_dynamicStatusNotes);
-        }
+        // _dynamicStatusNotes 在 Awake 中已初始化為 new List<string>()，所以不為 null
+        combinedNotes.AddRange(_dynamicStatusNotes);
         
-        // 移除重複項（如果可能因意外操作而產生）
-        // combinedNotes = combinedNotes.Distinct().ToList(); // Optional, if purity is needed
+        // 移除重複項是可選的，但可以確保傳輸的資料簡潔
+        // combinedNotes = combinedNotes.Distinct().ToList(); 
 
         return new LandmarkContextInfo
         {
@@ -172,7 +173,8 @@ public class LandmarkDataComponent : MonoBehaviour
             position = currentPosition,
             landmark_type_tag = this.landmarkTypeTag,
             owner_id = string.IsNullOrEmpty(this.ownerNpcId) ? null : this.ownerNpcId,
-            current_status_notes = combinedNotes.Count > 0 ? new List<string>(combinedNotes) : new List<string>() // 確保即使為空也傳遞空列表而非 null
+            // 確保即使 combinedNotes 為空，也傳遞一個空的 List<string> 而不是 null
+            current_status_notes = combinedNotes ?? new List<string>() 
         };
     }
 }
