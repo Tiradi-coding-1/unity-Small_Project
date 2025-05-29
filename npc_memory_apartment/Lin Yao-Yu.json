@@ -1,0 +1,46 @@
+{
+  "npc_id": "Lin Yao-Yu",
+  "name": "Lin Yao-Yu",
+  "personality_description": "A typical apartment resident, trying to coexist with roommates. Generally follows routines and values personal space but can be social in common areas.",
+  "last_saved_at": "2025-05-27T09:35:25.433289Z",
+  "last_known_game_time": {
+    "current_timestamp": "2025-01-01T08:07:14.222000Z",
+    "time_of_day": "morning",
+    "day_of_week": "Wednesday"
+  },
+  "last_known_position": {
+    "x": 5.781,
+    "y": 2.032
+  },
+  "current_emotional_state": {
+    "primary_emotion": "neutral",
+    "intensity": 0.5,
+    "mood_tags": [],
+    "last_significant_change_at": "2025-05-27T09:33:00.354338Z",
+    "reason_for_last_change": null
+  },
+  "active_schedule_rules": [],
+  "short_term_location_history": [
+    {
+      "x": 4.83090353,
+      "y": 0.186218023,
+      "timestamp_visited": "2025-05-27T09:33:00.357937Z"
+    },
+    {
+      "x": 1.75,
+      "y": 3.53,
+      "timestamp_visited": "2025-05-27T09:33:15.736721Z"
+    },
+    {
+      "x": 0.030000031,
+      "y": -2.77000022,
+      "timestamp_visited": "2025-05-27T09:33:31.621945Z"
+    },
+    {
+      "x": 5.90480471,
+      "y": -3.29986167,
+      "timestamp_visited": "2025-05-27T09:35:25.433289Z"
+    }
+  ],
+  "long_term_event_memories": []
+}

@@ -11,7 +11,7 @@ import yaml # For parsing YAML-like LLM output
 from app.core.schemas import (
     NPCMovementRequest, NPCMovementResponse, Position, NPCIdentifier,
     LandmarkContextInfo, EntityContextInfo, SceneBoundaryInfo, NPCEmotionalState,
-    GameTime, Message, # MessageRole (not directly used here but good to be aware of)
+    GameTime, Message, MessageRole, # <<<--- 添加 MessageRole
     OllamaChatOptions, NPCMemoryFile, default_aware_utcnow
 )
 from app.llm.ollama_client import OllamaService
@@ -267,13 +267,16 @@ class MovementService:
             # Apartment decisions might benefit from slightly higher temperature for variability, or lower for strict rule following. Test.
             llm_options = OllamaChatOptions(temperature=0.65, num_ctx=settings.DEFAULT_MAX_TOKENS, top_k=45, top_p=0.92) 
 
+            # *** MODIFICATION FOR FIX 1 START ***
+            messages_for_llm = [Message(role=MessageRole.SYSTEM, content=system_prompt_for_llm)]
             ollama_response_data = await self.ollama_service.generate_chat_completion(
                 model=effective_model,
-                # messages=[Message(role=MessageRole.SYSTEM, content=system_prompt_for_llm)], # Incorrect, MessageRole is enum
-                messages=[{"role": "system", "content": system_prompt_for_llm}], # Correct usage for ollama client
+                messages=messages_for_llm, # Pass List[Message]
                 stream=False,
-                options=llm_options.model_dump(exclude_none=True) if llm_options else None
+                options=llm_options # Pass OllamaChatOptions object directly
             )
+            # *** MODIFICATION FOR FIX 1 END ***
+            
             llm_raw_response_text = ollama_response_data.get('message', {}).get('content', "")
             logger.debug(f"NPC '{npc_id_obj.npc_id}' LLM Raw Response for movement: '{llm_raw_response_text[:300]}...'")
 

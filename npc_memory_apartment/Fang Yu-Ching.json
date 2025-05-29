@@ -1,0 +1,46 @@
+{
+  "npc_id": "Fang Yu-Ching",
+  "name": "Fang Yu-Ching",
+  "personality_description": "A typical apartment resident, trying to coexist with roommates. Generally follows routines and values personal space but can be social in common areas.",
+  "last_saved_at": "2025-05-27T09:35:27.080780Z",
+  "last_known_game_time": {
+    "current_timestamp": "2025-01-01T08:08:53.244000Z",
+    "time_of_day": "morning",
+    "day_of_week": "Wednesday"
+  },
+  "last_known_position": {
+    "x": -5.44788837,
+    "y": 1.90407228
+  },
+  "current_emotional_state": {
+    "primary_emotion": "neutral",
+    "intensity": 0.5,
+    "mood_tags": [],
+    "last_significant_change_at": "2025-05-27T09:32:55.475888Z",
+    "reason_for_last_change": null
+  },
+  "active_schedule_rules": [],
+  "short_term_location_history": [
+    {
+      "x": -4.340538,
+      "y": -3.477046,
+      "timestamp_visited": "2025-05-27T09:32:55.477953Z"
+    },
+    {
+      "x": -5.87651634,
+      "y": 3.29021025,
+      "timestamp_visited": "2025-05-27T09:33:17.034130Z"
+    },
+    {
+      "x": -0.04000002,
+      "y": 1.68,
+      "timestamp_visited": "2025-05-27T09:33:32.555808Z"
+    },
+    {
+      "x": 0.030000031,
+      "y": -2.77000022,
+      "timestamp_visited": "2025-05-27T09:35:27.080780Z"
+    }
+  ],
+  "long_term_event_memories": []
+}

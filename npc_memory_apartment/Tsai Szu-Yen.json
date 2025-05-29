@@ -1,0 +1,36 @@
+{
+  "npc_id": "Tsai Szu-Yen",
+  "name": "Tsai Szu-Yen",
+  "personality_description": "A typical apartment resident, trying to coexist with roommates. Generally follows routines and values personal space but can be social in common areas.",
+  "last_saved_at": "2025-05-27T09:35:24.451057Z",
+  "last_known_game_time": {
+    "current_timestamp": "2025-01-01T08:06:08.392000Z",
+    "time_of_day": "morning",
+    "day_of_week": "Wednesday"
+  },
+  "last_known_position": {
+    "x": -4.83788824,
+    "y": -1.19592762
+  },
+  "current_emotional_state": {
+    "primary_emotion": "neutral",
+    "intensity": 0.5,
+    "mood_tags": [],
+    "last_significant_change_at": "2025-05-27T09:33:33.391235Z",
+    "reason_for_last_change": null
+  },
+  "active_schedule_rules": [],
+  "short_term_location_history": [
+    {
+      "x": -5.88304424,
+      "y": -0.0142787695,
+      "timestamp_visited": "2025-05-27T09:33:33.394312Z"
+    },
+    {
+      "x": -5.86975145,
+      "y": -3.31823015,
+      "timestamp_visited": "2025-05-27T09:35:24.451057Z"
+    }
+  ],
+  "long_term_event_memories": []
+}

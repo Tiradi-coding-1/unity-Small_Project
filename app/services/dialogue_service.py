@@ -48,21 +48,21 @@ class DialogueService:
         """
         turn_timestamp = default_aware_utcnow()
         llm_response_data: Optional[Dict[str, Any]] = None
-        generated_message_original = "[Error: LLM response not obtained]"
+        generated_message_original_content = "[Error: LLM response not obtained]" # Renamed variable
         model_actually_used = effective_model
         ollama_created_at = turn_timestamp # Fallback
         llm_generated_emotional_tone = None # Placeholder
 
         try:
-            ollama_options_dict = ollama_options.model_dump(exclude_none=True) if ollama_options else None
+            # ollama_options_dict = ollama_options.model_dump(exclude_none=True) if ollama_options else None # This is handled by ollama_client now if options is OllamaChatOptions type
             llm_response_data = await self.ollama_service.generate_chat_completion(
                 model=effective_model,
                 messages=messages_for_llm,
                 stream=False, # Game interactions are typically non-streamed per turn
-                options=ollama_options_dict
+                options=ollama_options # Pass OllamaChatOptions object directly
             )
             
-            generated_message_original = llm_response_data.get('message', {}).get('content', "[LLM provided no content]").strip()
+            generated_message_original_content = llm_response_data.get('message', {}).get('content', "[LLM provided no content]").strip()
             model_actually_used = llm_response_data.get('model', effective_model)
             created_at_str = llm_response_data.get('created_at')
             if created_at_str:
@@ -79,24 +79,24 @@ class DialogueService:
 
         except ollama.ResponseError as e:
             logger.error(f"Ollama API error for NPC '{npc_info.npc_id}' using model '{effective_model}': {e.status_code} - {e.error}", exc_info=True)
-            generated_message_original = f"[LLM Error: {e.error[:100] if e.error else 'Unknown Ollama Error'}]" # Truncate long errors
+            generated_message_original_content = f"[LLM Error: {e.error[:100] if e.error else 'Unknown Ollama Error'}]" # Truncate long errors
         except ConnectionError as e:
             logger.error(f"Ollama connection error for NPC '{npc_info.npc_id}': {e}", exc_info=True)
-            generated_message_original = "[LLM Error: Connection Failed]"
+            generated_message_original_content = "[LLM Error: Connection Failed]"
         except Exception as e:
             logger.error(f"Unexpected error generating turn for NPC '{npc_info.npc_id}': {e}", exc_info=True)
-            generated_message_original = f"[LLM Error: Unexpected {type(e).__name__}]"
+            generated_message_original_content = f"[LLM Error: Unexpected {type(e).__name__}]"
 
         # Translate the original message
         translated_message_zh_tw = await self.translator_service.translate_text(
-            text_to_translate=generated_message_original,
+            text_to_translate=generated_message_original_content,
             # source_language, target_language, translation_model_override can be added if needed
         )
 
         return DialogueTurn(
             npc_id=npc_info.npc_id,
             name=npc_info.name,
-            message_original_language=generated_message_original,
+            message_original_language=generated_message_original_content,
             message_translated_zh_tw=translated_message_zh_tw,
             model_used=model_actually_used,
             timestamp_api_generated=turn_timestamp, # When this DialogueTurn object was created by API
@@ -124,7 +124,7 @@ class DialogueService:
         if request.scene_context_description:
             llm_context_messages.append(Message(role=MessageRole.SYSTEM, content=f"Overall scene context: {request.scene_context_description}"))
         if request.game_time_context:
-             time_str = request.game_time_context.current_timestamp.strftime('%Y-%m-%d %H:%M %Z')
+             time_str = request.game_time_context.current_timestamp.strftime('%Y-%m-%d %H:%M %Z') # Corrected: current_timestamp is datetime
              llm_context_messages.append(Message(role=MessageRole.SYSTEM, content=f"Current game time: {request.game_time_context.time_of_day} ({time_str})."))
 
 
@@ -169,12 +169,20 @@ class DialogueService:
 
                 effective_model = current_object_config.model_override or settings.DEFAULT_OLLAMA_MODEL
                 
+                # Assuming current_object_config might have its own OllamaChatOptions
+                # If not, ollama_options can be None or a default can be created here.
+                # For simplicity, let's assume no per-object options override for now.
+                chat_opts_for_turn: Optional[OllamaChatOptions] = None 
+                # Example if you add OllamaChatOptions to InteractingObjectInfo:
+                # if hasattr(current_object_config, 'ollama_options') and current_object_config.ollama_options:
+                #    chat_opts_for_turn = current_object_config.ollama_options
+
                 # Generate and translate the turn
                 generated_turn: DialogueTurn = await self._generate_and_translate_turn(
                     npc_info=current_object_config, # Pass the full InteractingObjectInfo
                     effective_model=effective_model,
-                    messages_for_llm=messages_for_this_llm_call
-                    # ollama_options can be passed from current_object_config if defined in its schema
+                    messages_for_llm=messages_for_this_llm_call,
+                    ollama_options=chat_opts_for_turn 
                 )
                 
                 turn_processing_time_ms = (time.perf_counter() - turn_processing_start_time) * 1000
@@ -185,7 +193,11 @@ class DialogueService:
                 # Important: Use the *original language* message for the LLM context.
                 # We represent the "user" prompt that led to this turn, and then the "assistant" (this NPC's) response.
                 # This helps the next LLM understand what this NPC was responding to.
-                if not generated_message_original.startswith("[LLM Error:") and not generated_message_original.startswith("[Translation"): # Only add valid responses to history
+                
+                # *** MODIFICATION FOR FIX 4 START ***
+                if not generated_turn.message_original_language.startswith("[LLM Error:") and \
+                   not generated_turn.message_original_language.startswith("[Translation"):
+                # *** MODIFICATION FOR FIX 4 END ***
                     llm_context_messages.append(Message(
                         role=MessageRole.USER, # Or System, to indicate what the NPC was prompted with
                         content=f"({current_object_config.name or current_object_config.npc_id} was prompted with: '{user_prompt_for_this_turn}')"
@@ -236,12 +248,12 @@ class DialogueService:
             raise NotImplementedError("Streaming for /chat/standard not fully implemented in DialogueService yet.")
 
         try:
-            ollama_options_dict = request.options.model_dump(exclude_none=True) if request.options else None
+            # ollama_options_dict = request.options.model_dump(exclude_none=True) if request.options else None # Handled by ollama_client
             response_data = await self.ollama_service.generate_chat_completion(
                 model=request.model or settings.DEFAULT_OLLAMA_MODEL,
-                messages=request.messages,
+                messages=request.messages, # Assumes messages are List[Message] as per StandardChatRequest schema
                 stream=False, # Explicitly non-streamed for this path
-                options=ollama_options_dict
+                options=request.options # Pass OllamaChatOptions object directly
             )
             
             api_processing_time_ms = (time.perf_counter() - start_time) * 1000

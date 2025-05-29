@@ -12,7 +12,7 @@ from app.core.config import settings_instance as settings
 from app.core.logging_config import setup_logging
 from app.core.schemas import (
     NPCMemoryFile, VisitedLocationEntry, NPCEmotionalState, Position,
-    LongTermMemoryEntry, GameTime, NPCScheduleRule # Ensure all relevant schemas are imported
+    LongTermMemoryEntry, GameTime, NPCScheduleRule, default_aware_utcnow # <--- 在此處添加 default_aware_utcnow
 )
 
 logger = setup_logging(__name__)
@@ -214,10 +214,10 @@ class NPCMemoryService:
 
     async def update_emotional_state(self, new_primary_emotion: str, intensity: float, reason: Optional[str] = None, mood_tags: Optional[List[str]]=None):
         memory = await self.get_memory_data()
-        memory.emotional_state = NPCEmotionalState(
+        memory.current_emotional_state = NPCEmotionalState(
             primary_emotion=new_primary_emotion,
             intensity=intensity,
-            mood_tags=mood_tags if mood_tags is not None else memory.emotional_state.mood_tags, # Preserve old if not provided
+            mood_tags=mood_tags if mood_tags is not None else memory.current_emotional_state.mood_tags, # Preserve old if not provided
             last_significant_change_at=default_aware_utcnow(),
             reason_for_last_change=reason
         )

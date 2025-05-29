@@ -128,7 +128,7 @@ public static class ApiService
             Debug.LogError("[ApiService] API Base URL not set. Call ApiService.SetApiBaseUrl() first before making API calls.");
             return null;
         }
-        string fullUrl = $"{_apiBaseUrl}{endpoint.TrimStart('/')}";
+        string fullUrl = $"{_apiBaseUrl.TrimEnd('/')}/{endpoint.TrimStart('/')}"; // <--- 修改處
 
         string jsonPayload = "{}"; // 預設為空 JSON 物件，以防 payload 為 null
         if (payload != null)
@@ -147,6 +147,7 @@ public static class ApiService
         // 為了調試，可以打印 payload，但要注意如果 payload 包含敏感資訊
         // Debug.Log($"[ApiService] Sending POST to {fullUrl}\nPayload: {jsonPayload}");
         Debug.Log($"[ApiService] Sending POST to {fullUrl} with payload of type {typeof(TRequest).Name}");
+        Debug.LogWarning($"[ApiService] For PostAsync - Endpoint: '{endpoint}', _apiBaseUrl: '{_apiBaseUrl}', Constructed fullUrl: '{fullUrl}'");
 
 
         using (UnityWebRequest request = new UnityWebRequest(fullUrl, UnityWebRequest.kHttpVerbPOST))
@@ -184,7 +185,8 @@ public static class ApiService
             Debug.LogError("[ApiService] API Base URL not set. Call ApiService.SetApiBaseUrl() first.");
             return null;
         }
-        string fullUrl = $"{_apiBaseUrl}{endpoint.TrimStart('/')}";
+        string fullUrlWithoutQuery = $"{_apiBaseUrl.TrimEnd('/')}/{endpoint.TrimStart('/')}"; // <--- 修改處
+        string fullUrl = fullUrlWithoutQuery;
 
         if (queryParams != null && queryParams.Count > 0)
         {
@@ -225,7 +227,7 @@ public static class ApiService
             Debug.LogError("[ApiService] API Base URL not set. Call ApiService.SetApiBaseUrl() first.");
             return false;
         }
-        string fullUrl = $"{_apiBaseUrl}{endpoint.TrimStart('/')}";
+        string fullUrl = $"{_apiBaseUrl.TrimEnd('/')}/{endpoint.TrimStart('/')}"; // <--- 修改處
         Debug.Log($"[ApiService] Sending DELETE to {fullUrl}");
 
         using (UnityWebRequest request = UnityWebRequest.Delete(fullUrl)) // UnityWebRequest.Delete 創建 DELETE 請求

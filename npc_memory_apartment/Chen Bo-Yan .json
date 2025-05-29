@@ -1,0 +1,41 @@
+{
+  "npc_id": "Chen Bo-Yan ",
+  "name": "Chen Bo-Yan ",
+  "personality_description": "A typical apartment resident, trying to coexist with roommates. Generally follows routines and values personal space but can be social in common areas.",
+  "last_saved_at": "2025-05-27T09:33:33.414207Z",
+  "last_known_game_time": {
+    "current_timestamp": "2025-01-01T08:44:02.986000Z",
+    "time_of_day": "morning",
+    "day_of_week": "Wednesday"
+  },
+  "last_known_position": {
+    "x": -4.06994629,
+    "y": -2.74889565
+  },
+  "current_emotional_state": {
+    "primary_emotion": "neutral",
+    "intensity": 0.5,
+    "mood_tags": [],
+    "last_significant_change_at": "2025-05-27T09:32:55.250905Z",
+    "reason_for_last_change": null
+  },
+  "active_schedule_rules": [],
+  "short_term_location_history": [
+    {
+      "x": 0.030000031,
+      "y": -2.77000022,
+      "timestamp_visited": "2025-05-27T09:32:55.258451Z"
+    },
+    {
+      "x": -7.285638,
+      "y": -2.73234582,
+      "timestamp_visited": "2025-05-27T09:33:11.258023Z"
+    },
+    {
+      "x": 4.4821,
+      "y": -2.9537,
+      "timestamp_visited": "2025-05-27T09:33:33.414207Z"
+    }
+  ],
+  "long_term_event_memories": []
+}

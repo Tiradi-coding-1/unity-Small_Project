@@ -2,7 +2,7 @@
 
 from typing import Optional
 from app.llm.ollama_client import OllamaService # 使用共享的 Ollama 服務
-from app.core.schemas import Message # 從 schemas 導入 Message 模型 (雖然 build_translation_prompt_messages 已導入)
+from app.core.schemas import Message, OllamaChatOptions # <<<--- 添加 OllamaChatOptions
 from app.llm.prompt_builder import build_translation_prompt_messages # 使用提示構建器
 from app.core.config import settings_instance as settings # 獲取預設翻譯模型等設定
 from app.core.logging_config import setup_logging # 使用日誌
@@ -65,14 +65,17 @@ class TextTranslatorService:
             logger.debug(f"Attempting translation from '{source_language}' to '{target_language}' "
                          f"for text: '{text_to_translate[:70]}...' using model '{effective_translation_model}'")
             
+            # *** MODIFICATION FOR FIX 3 START ***
+            chat_options = OllamaChatOptions(temperature=0.2, num_ctx=1024) # 示例：低溫，適中上下文
             # 調用 Ollama 服務進行聊天補全 (即翻譯)
             # 翻譯任務通常不需要流式輸出，且溫度可以設低一些以求精確
             ollama_response = await self.ollama_service.generate_chat_completion(
                 model=effective_translation_model,
                 messages=translation_messages,
                 stream=False,
-                options={"temperature": 0.2, "num_ctx": 1024} # 示例：低溫，適中上下文
+                options=chat_options # Pass OllamaChatOptions object
             )
+            # *** MODIFICATION FOR FIX 3 END ***
             
             # 從 Ollama 回應中提取翻譯後的文本
             # Ollama chat response format: {'model': '...', 'created_at': '...', 'message': {'role': 'assistant', 'content': '...'}, ...}

@@ -79,10 +79,10 @@ public class LandmarkDataComponent : MonoBehaviour
                 changed = true;
             }
         }
-        // if (changed)
-        // {
-        //     Debug.Log($"[{landmarkName}-{gameObject.GetInstanceID()}] Status updated with prefix '{notePrefixToRemove}'. New full note: '{newNoteFull ?? "NONE"}'. Current dynamic notes: {string.Join(", ", _dynamicStatusNotes)}");
-        // }
+        if (changed) // <--- 取消註解此區塊
+        {
+            Debug.Log($"[{landmarkName}-{gameObject.GetInstanceID()}] Status updated with prefix '{notePrefixToRemove}'. New full note: '{newNoteFull ?? "NONE"}'. Current dynamic notes: {string.Join(", ", _dynamicStatusNotes)}");
+        }
     }
 
     /// <summary>
