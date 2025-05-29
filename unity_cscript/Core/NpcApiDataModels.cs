@@ -514,6 +514,11 @@ namespace NpcApiModels
         [JsonProperty("current_status_notes")]
 #endif
         public List<string> current_status_notes = new List<string>();
+
+#if NEWTONSOFT_JSON_AVAILABLE
+        [JsonProperty("entrance_positions")] // *** 新增欄位 ***
+#endif
+        public List<Position> entrancePositions = new List<Position>(); // *** 新增欄位 ***
     }
 
     [System.Serializable]

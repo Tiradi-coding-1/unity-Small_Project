@@ -185,6 +185,7 @@ class LandmarkContextInfo(BaseModel):
     landmark_type_tag: Optional[str] = Field(None, examples=["bedroom", "kitchen", "living_room", "bathroom", "dining_room", "room_entrance", "furniture_sofa", "furniture_table", "appliance_stove", "appliance_refrigerator", "obstacle_plant"]) 
     owner_id: Optional[str] = Field(None, description="NPC ID of the owner (e.g., for a private bedroom).") 
     current_status_notes: List[str] = Field(default_factory=list, examples=[["occupancy_occupied_by_NPC_A"], ["owner_presence_absent"], ["state_tv_on"], ["state_food_cooking_on_stove"]], description="Dynamic notes about the landmark, e.g., if a bathroom is occupied, if a room owner is present.") 
+    entrance_positions: Optional[List[Position]] = Field(default_factory=list, description="List of entrance/waiting point coordinates for this landmark, if applicable (e.g., for rooms).") # *** 新增欄位 ***
 
 class SceneBoundaryInfo(BaseModel):
     min_x: float

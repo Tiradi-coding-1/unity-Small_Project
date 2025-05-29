@@ -4,7 +4,7 @@ import ollama # type: ignore
 from typing import Optional, List, Dict, Any, AsyncGenerator, Union
 from app.core.config import settings_instance as settings
 from app.core.logging_config import setup_logging
-from app.core.schemas import Message, OllamaChatOptions
+from app.core.schemas import Message, OllamaChatOptions 
 from datetime import datetime, timezone
 
 logger = setup_logging(__name__)
@@ -32,45 +32,42 @@ class OllamaService:
 
             try:
                 logger.debug("Attempting to list models to verify Ollama connection...")
-                response_data = await temp_client.list() 
-                available_models_list = response_data.get("models", [])
+                response_data = await temp_client.list()
+                
+                available_models_list_raw = response_data if isinstance(response_data, dict) else {}
+                available_models_list = available_models_list_raw.get("models", []) 
                 
                 model_names = []
                 if isinstance(available_models_list, list) and available_models_list:
-                    for i, model_info_dict in enumerate(available_models_list):
-                        model_name_tag = None
-                        if isinstance(model_info_dict, dict):
-                            # MODIFIED: Log all keys if 'name' and 'model' are not found or empty
-                            model_name_tag = model_info_dict.get('name')
-                            if not model_name_tag: 
-                                model_name_tag = model_info_dict.get('model')
-                            
-                            if not model_name_tag: # If still not found, log keys
-                                logger.warning(f"Ollama model data at index {i} missing 'name'/'model'. Keys: {list(model_info_dict.keys())}. Data: {str(model_info_dict)[:200]}...")
+                    for i, model_obj in enumerate(available_models_list):
+                        model_identifier = None
+                        # Try 'model' attribute first, then 'name' as fallback
+                        # Based on logs: Type: <class 'ollama._types.ListResponse.Model'>. Data: model='yi:6b'
+                        if hasattr(model_obj, 'model') and model_obj.model:
+                            model_identifier = model_obj.model
+                        elif hasattr(model_obj, 'name') and model_obj.name: 
+                            model_identifier = model_obj.name
+                        
+                        if model_identifier:
+                            model_names.append(model_identifier)
                         else:
-                            logger.warning(f"Ollama model data at index {i} is not a dict. Type: {type(model_info_dict)}. Data: {str(model_info_dict)[:200]}...")
-
-                        if model_name_tag:
-                            model_names.append(model_name_tag)
-                        else:
-                            # Warning already logged above if keys were missing from dict
-                            # or if it wasn't a dict.
-                            model_names.append(None)
+                            logger.warning(f"Ollama model data at index {i} missing 'model' or 'name' attribute, or it's empty. Object type: {type(model_obj)}. Data: {str(model_obj)[:200]}...")
+                            model_names.append(None) 
                 elif not available_models_list and isinstance(available_models_list, list):
-                     logger.info("Ollama reports no models are currently available/downloaded via client.list().")
+                     logger.info("Ollama reports no models are currently available/downloaded via client.list(). This is OK if you intend to use specific model names directly.")
                 else:
                     logger.warning(f"Ollama 'models' field from client.list() is not a list or is missing. Response: {response_data}")
 
                 valid_model_names = [name for name in model_names if name is not None]
-                if not valid_model_names:
+                if not valid_model_names and available_models_list: # If list was not empty but we parsed no names
                     logger.warning(
-                        f"No valid Ollama models found after parsing client.list() response. "
-                        f"Parsed names (including None for errors): {model_names}. "
-                        f"Please ensure Ollama is running, models are pulled (e.g., 'ollama pull {settings.DEFAULT_OLLAMA_MODEL}'), "
-                        f"and the OLLAMA_HOST ('{settings.OLLAMA_HOST}') is correct."
+                        f"Could not parse any valid model names from client.list() response, though models were present. "
+                        f"Attempted model identifiers (including None for errors): {model_names}. "
+                        f"Please ensure Ollama is running, models are pulled, and OLLAMA_HOST ('{settings.OLLAMA_HOST}') is correct."
                     )
-                else:
-                    logger.info(f"Successfully connected to Ollama. Available models from client.list(): {valid_model_names}")
+                elif valid_model_names: # If we successfully parsed some names
+                    logger.info(f"Successfully connected to Ollama. Parsed available model identifiers from client.list(): {valid_model_names}")
+                # If available_models_list was empty from the start, the earlier log message is sufficient.
                 
                 cls._client = temp_client
                 cls._is_initialized_successfully = True 
@@ -89,11 +86,17 @@ class OllamaService:
         if cls._client:
             logger.info("Ollama AsyncClient is being 'closed' (client instance will be reset).")
             try:
-                if hasattr(cls._client, '_client') and cls._client._client is not None: 
-                    await cls._client._client.aclose() # type: ignore
+                if hasattr(cls._client, 'aclose') and callable(cls._client.aclose):
+                    await cls._client.aclose() 
+                    logger.debug("Ollama AsyncClient aclosed successfully.")
+                elif hasattr(cls._client, '_client') and cls._client._client is not None and \
+                     hasattr(cls._client._client, 'aclose') and callable(cls._client._client.aclose): 
+                    await cls._client._client.aclose() 
                     logger.debug("Underlying httpx.AsyncClient aclosed.")
+                else:
+                    logger.debug("No standard aclose method found on client or its _client attribute.")
             except Exception as e_aclose:
-                logger.warning(f"Error trying to aclose underlying httpx client: {e_aclose}")
+                logger.warning(f"Error trying to aclose Ollama client or underlying httpx client: {e_aclose}")
             cls._client = None
         cls._is_initialized_successfully = False
 
@@ -101,7 +104,7 @@ class OllamaService:
     def get_client(cls) -> ollama.AsyncClient:
         if not cls._is_initialized_successfully or cls._client is None:
             logger.error("Ollama AsyncClient requested but is not available or initialization failed.")
-            raise ConnectionError("Ollama service client is not available. Please ensure it's initialized and successfully connected.")
+            raise ConnectionError("Ollama service client is not available. Ensure Ollama is running and models are pulled.")
         return cls._client
 
     @classmethod
@@ -112,31 +115,57 @@ class OllamaService:
     async def list_available_models(cls, log_success: bool = False) -> List[Dict[str, Any]]:
         client = cls.get_client() 
         try:
-            response_data = await client.list()
-            available_models_list = response_data.get("models", [])
+            response_data_raw = await client.list() 
             
-            if not isinstance(available_models_list, list):
-                logger.warning(f"Ollama list models API did not return a list under 'models' key. Got: {type(available_models_list)}")
+            if not isinstance(response_data_raw, dict):
+                logger.warning(f"Ollama list models API did not return a dictionary. Got: {type(response_data_raw)}")
+                return []
+            
+            available_models_obj_list = response_data_raw.get("models", [])
+            
+            if not isinstance(available_models_obj_list, list):
+                logger.warning(f"Ollama list models API 'models' field is not a list. Got: {type(available_models_obj_list)}")
                 return []
 
-            if log_success: 
-                model_names_for_log = []
-                for model_info in available_models_list: 
-                    name_tag = None
-                    if isinstance(model_info, dict):
-                        name_tag = model_info.get('name') or model_info.get('model')
-                    # Removed hasattr checks as they are less reliable for TypedDicts if structure is fixed.
-                    # The primary check is isinstance(dict) and .get()
-                    if name_tag:
-                        model_names_for_log.append(name_tag)
+            models_as_dicts: List[Dict[str, Any]] = []
+            model_identifiers_for_log = []
+
+            for model_obj in available_models_obj_list:
+                model_dict = {}
+                model_identifier = None
+
+                # Prefer 'model' attribute if present, then 'name'
+                if hasattr(model_obj, 'model') and model_obj.model: 
+                    model_identifier = model_obj.model
+                    model_dict['name'] = model_obj.model # Use 'name' in our dict for consistency
+                elif hasattr(model_obj, 'name') and model_obj.name: 
+                    model_identifier = model_obj.name
+                    model_dict['name'] = model_obj.name
                 
-                if not model_names_for_log and available_models_list:
-                     logger.warning(f"Ollama models listed but names/model tags could not be extracted. Data: {available_models_list}")
-                elif model_names_for_log :
-                     logger.info(f"Ollama models listed successfully: {model_names_for_log}")
+                if hasattr(model_obj, 'modified_at'): model_dict['modified_at'] = str(model_obj.modified_at)
+                if hasattr(model_obj, 'size'): model_dict['size'] = int(model_obj.size) 
+                if hasattr(model_obj, 'digest'): model_dict['digest'] = str(model_obj.digest)
+                
+                details_attr = getattr(model_obj, 'details', None) 
+                if isinstance(details_attr, dict): 
+                     model_dict['details'] = details_attr
+                else:
+                     model_dict['details'] = {}
+
+                if model_identifier: 
+                    models_as_dicts.append(model_dict)
+                    model_identifiers_for_log.append(model_identifier)
+                else:
+                    logger.warning(f"Could not extract 'model' or 'name' attribute from a model object: {str(model_obj)[:200]}")
+
+            if log_success:
+                if not model_identifiers_for_log and available_models_obj_list: 
+                     logger.warning(f"Ollama models listed but identifiers could not be reliably extracted from all objects. Data sample: {str(available_models_obj_list)[:200]}")
+                elif model_identifiers_for_log:
+                     logger.info(f"Ollama models listed successfully (parsed identifiers): {model_identifiers_for_log}")
                 else: 
-                     logger.info("Ollama reports no models available via list API.")
-            return available_models_list 
+                     logger.info("Ollama reports no models available via list API or failed to parse them.")
+            return models_as_dicts
             
         except ollama.ResponseError as e: 
             logger.error(f"Ollama API error when listing models: {e.status_code} - {e.error}", exc_info=True)
@@ -156,10 +185,10 @@ class OllamaService:
         client = cls.get_client() 
         
         formatted_messages: List[Dict[str, Any]] = []
-        for msg in messages:
-            msg_dict: Dict[str, Any] = {"role": msg.role.value, "content": msg.content}
-            if msg.name:
-                msg_dict["name"] = msg.name
+        for msg_model in messages:
+            msg_dict: Dict[str, Any] = {"role": msg_model.role.value, "content": msg_model.content}
+            if msg_model.name:
+                msg_dict["name"] = msg_model.name
             formatted_messages.append(msg_dict)
 
         effective_model = model if model else settings.DEFAULT_OLLAMA_MODEL
@@ -172,90 +201,148 @@ class OllamaService:
             ollama_options_dict = options.model_dump(exclude_none=True)
             if "num_ctx" not in ollama_options_dict and settings.DEFAULT_MAX_TOKENS > 0 :
                  ollama_options_dict["num_ctx"] = settings.DEFAULT_MAX_TOKENS
-        elif settings.DEFAULT_MAX_TOKENS > 0 :
-             ollama_options_dict= {"num_ctx": settings.DEFAULT_MAX_TOKENS}
+            elif "num_ctx" in ollama_options_dict and ollama_options_dict["num_ctx"] is not None and ollama_options_dict["num_ctx"] <= 0:
+                logger.warning(f"num_ctx in Ollama options was {ollama_options_dict['num_ctx']}, which is invalid. Removing it.")
+                del ollama_options_dict["num_ctx"] 
+                if settings.DEFAULT_MAX_TOKENS > 0 and "num_ctx" not in ollama_options_dict:
+                     ollama_options_dict["num_ctx"] = settings.DEFAULT_MAX_TOKENS
+        elif settings.DEFAULT_MAX_TOKENS > 0 : 
+             ollama_options_dict = {"num_ctx": settings.DEFAULT_MAX_TOKENS}
 
         logger.debug(f"Sending chat request to Ollama. Model: {effective_model}, Messages count: {len(formatted_messages)}, Stream: {stream}, Options: {ollama_options_dict}")
         
         try:
-            chat_response_obj = await client.chat( 
+            raw_chat_response_object = await client.chat( 
                 model=effective_model,
-                messages=formatted_messages, # type: ignore
+                messages=formatted_messages, 
                 stream=stream,
-                options=ollama_options_dict
+                options=ollama_options_dict 
             )
             
             if stream: 
                 async def stream_wrapper() -> AsyncGenerator[Dict[str, Any], None]:
                     try:
-                        async for chunk in chat_response_obj: # type: ignore
-                            yield chunk 
+                        if not hasattr(raw_chat_response_object, '__aiter__'):
+                            logger.error(f"Ollama stream response was not an async generator for model {effective_model}. Type: {type(raw_chat_response_object)}")
+                            yield {
+                                "model": effective_model,
+                                "created_at": datetime.now(timezone.utc).isoformat(),
+                                "error": "Stream initialization failed, expected async generator.",
+                                "done": True
+                            }
+                            return
+                        async for chunk_obj in raw_chat_response_object: 
+                            chunk_dict = {}
+                            chunk_dict['model'] = getattr(chunk_obj, 'model', effective_model)
+                            created_at_dt_chunk = getattr(chunk_obj, 'created_at', datetime.now(timezone.utc))
+                            chunk_dict['created_at'] = created_at_dt_chunk.isoformat() if isinstance(created_at_dt_chunk, datetime) else str(created_at_dt_chunk)
+                            chunk_dict['done'] = getattr(chunk_obj, 'done', False) 
+                            
+                            message_attr = getattr(chunk_obj, 'message', None)
+                            if message_attr and hasattr(message_attr, 'role') and hasattr(message_attr, 'content'):
+                                chunk_dict['message'] = {'role': message_attr.role, 'content': message_attr.content or ""}
+                            else: 
+                                chunk_dict['message'] = {'role': 'assistant', 'content': ''}
+
+                            if hasattr(chunk_obj, 'done_reason'): chunk_dict['done_reason'] = chunk_obj.done_reason
+                            yield chunk_dict
                     except ollama.ResponseError as e_stream:
                         logger.error(f"Ollama API error during stream (model: {effective_model}): {e_stream.status_code} - {e_stream.error}", exc_info=True)
-                        raise 
+                        yield {
+                            "model": effective_model,
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                            "error": f"Ollama API Error: {e_stream.error}",
+                            "message": {"role": "assistant", "content": f"[Stream Error: {e_stream.error}]"},
+                            "done": True,
+                            "done_reason": "error"
+                        }
                     except Exception as e_stream_unexpected:
                         logger.error(f"Unexpected error during Ollama stream (model: {effective_model}): {e_stream_unexpected}", exc_info=True)
-                        raise
+                        yield {
+                            "model": effective_model,
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                            "error": f"Unexpected stream error: {type(e_stream_unexpected).__name__}",
+                            "message": {"role": "assistant", "content": f"[Unexpected Stream Error: {type(e_stream_unexpected).__name__}]"},
+                            "done": True,
+                            "done_reason": "error"
+                        }
                 return stream_wrapper()
             else: 
-                if chat_response_obj is None:
-                    logger.error(f"Ollama non-streamed response was unexpectedly None for model {effective_model}.")
-                    return {
-                        "model": effective_model, 
-                        "created_at": datetime.now(timezone.utc).isoformat(), 
-                        "message": {"role": "assistant", "content": "[LLM response was None]"}, 
-                        "done": True,
-                        "done_reason": "error_empty_response"
-                    }
+                response_to_return: Dict[str, Any] = {}
+                response_to_return['model'] = getattr(raw_chat_response_object, 'model', effective_model)
+                created_at_dt = getattr(raw_chat_response_object, 'created_at', datetime.now(timezone.utc))
+                response_to_return['created_at'] = created_at_dt.isoformat() if isinstance(created_at_dt, datetime) else str(created_at_dt)
+                response_to_return['done'] = getattr(raw_chat_response_object, 'done', True)
                 
-                # MODIFIED: Treat empty content as a valid (but empty) response from LLM for now.
-                # The service layer (MovementService) will then parse this empty content.
-                message_field = chat_response_obj.get('message')
-                if not isinstance(message_field, dict): # Check if 'message' itself is a dict
-                    logger.error(f"Ollama non-streamed response for model {effective_model} has an invalid 'message' field (not a dict). Message field type: {type(message_field)}. Response dump: {str(chat_response_obj)[:300]}...")
-                    return {
-                        "model": effective_model,
-                        "created_at": chat_response_obj.get('created_at', datetime.now(timezone.utc).isoformat()), # type: ignore
-                        "message": {"role": "assistant", "content": "[LLM response: 'message' field invalid]"},
-                        "done": chat_response_obj.get('done', True), # type: ignore
-                        "done_reason": chat_response_obj.get('done_reason', 'error_malformed_message_field') # type: ignore
-                    }
+                done_reason_attr = getattr(raw_chat_response_object, 'done_reason', None)
+                if done_reason_attr is not None: 
+                    response_to_return['done_reason'] = done_reason_attr
                 
-                # 'content' key must exist in message_field, even if its value is an empty string.
-                # If 'content' key itself is missing, that's a structural problem.
-                if 'content' not in message_field:
-                    logger.error(f"Ollama non-streamed response for model {effective_model}, 'message' field is missing 'content' key. Message field: {message_field}. Response dump: {str(chat_response_obj)[:300]}...")
-                    return {
-                        "model": effective_model,
-                        "created_at": chat_response_obj.get('created_at', datetime.now(timezone.utc).isoformat()), # type: ignore
-                        "message": {"role": "assistant", "content": "[LLM response: 'message' missing 'content']"},
-                        "done": chat_response_obj.get('done', True), # type: ignore
-                        "done_reason": chat_response_obj.get('done_reason', 'error_message_missing_content_key') # type: ignore
-                    }
+                message_obj = getattr(raw_chat_response_object, 'message', None)
+                msg_content = "[LLM message attribute not found or invalid]"
+                msg_role = "assistant"
 
-                # If we reach here, 'message' is a dict and 'content' key exists.
-                # The content might be an empty string, which is what the log showed.
-                # We will now pass this chat_response_obj as is.
-                # The MovementService will get chat_response_obj['message']['content'], which might be "".
+                if message_obj: 
+                    msg_content = getattr(message_obj, 'content', "[LLM message object missing content attribute]")
+                    msg_content = msg_content if msg_content is not None else "" 
+                    msg_role = getattr(message_obj, 'role', "assistant")
+                    if not msg_role: msg_role = "assistant" 
+                else:
+                     logger.error(f"Ollama non-streamed response object for model {effective_model} is missing 'message' attribute. Response obj type: {type(raw_chat_response_object)}")
+
+                response_to_return['message'] = {"role": msg_role, "content": msg_content}
+
+                for field_name in ['total_duration', 'load_duration', 'prompt_eval_count', 'prompt_eval_duration', 'eval_count', 'eval_duration']:
+                    if hasattr(raw_chat_response_object, field_name):
+                        value = getattr(raw_chat_response_object, field_name)
+                        if value is not None: 
+                             response_to_return[field_name] = value
                 
-                # Log if content is empty for debugging purposes
-                if not message_field.get('content'): # Checks for None or empty string
-                     logger.warning(f"Ollama non-streamed response for model {effective_model} has an empty 'content' in 'message' field. Message: {message_field}")
+                if not msg_content and message_obj is not None : 
+                     logger.warning(f"Ollama non-streamed response for model {effective_model} resulted in empty 'content'. Message: {response_to_return['message']}")
                 
-                return chat_response_obj # type: ignore 
+                return response_to_return
+        
         except ollama.ResponseError as e: 
             logger.error(f"Ollama API error (model: {effective_model}): {e.status_code} - {e.error}", exc_info=True)
-            raise
-        except ConnectionError: 
-            raise
-        except NameError as ne:
-            logger.error(f"NameError during Ollama chat (model: {effective_model}): {ne}. This likely means a missing import.", exc_info=True)
-            raise 
+            # Construct a dictionary that mimics the expected error structure if possible
+            # This helps services consuming this method to handle errors more gracefully.
+            return {
+                "model": effective_model,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "message": {"role": "assistant", "content": f"[Ollama API Error: {e.error}]"},
+                "done": True,
+                "done_reason": "error",
+                "error": f"Ollama API Error: Status {e.status_code} - {e.error}" # Add specific error info
+            }
+        except ConnectionError as e_conn: 
+            logger.error(f"Ollama connection error during chat (model: {effective_model}): {e_conn}", exc_info=True)
+            raise # Re-raise to be caught by global handler
+        except ValueError as ve: # Catch potential ValueErrors from model name issues etc.
+            logger.error(f"ValueError during Ollama chat setup (model: {effective_model}): {ve}", exc_info=True)
+            return { # Return an error structure
+                "model": effective_model,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "message": {"role": "assistant", "content": f"[Configuration Error: {ve}]"},
+                "done": True,
+                "done_reason": "error",
+                "error": f"Configuration Error: {ve}"
+            }
         except Exception as e: 
             logger.error(f"Unexpected error during Ollama chat (model: {effective_model}): {e}", exc_info=True)
-            raise
+            # For truly unexpected errors, also return an error structure
+            return {
+                "model": effective_model,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "message": {"role": "assistant", "content": f"[Unexpected Server Error: {type(e).__name__}]"},
+                "done": True,
+                "done_reason": "error",
+                "error": f"Unexpected Server Error: {type(e).__name__} - {str(e)}"
+            }
+
 
 async def get_ollama_service() -> OllamaService:
     if not OllamaService.is_ready():
-        logger.warning("get_ollama_service dependency called when OllamaService is not ready. Lifespan may have failed to initialize client properly.")
+        logger.critical("get_ollama_service dependency called but OllamaService is not ready. This indicates a critical issue with Ollama client initialization.")
+        raise HTTPException(status_code=503, detail="Ollama service client is not initialized or unavailable.")
     return OllamaService

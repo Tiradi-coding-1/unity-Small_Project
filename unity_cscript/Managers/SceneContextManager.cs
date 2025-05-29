@@ -1,4 +1,3 @@
-// 檔案名稱: tiradi-coding-1/unity-small_project/unity-Small_Project-ec8a534c2acd0effbb69c32bc060ff9194dcfba1/unity_cscript/Managers/SceneContextManager.cs
 // SceneContextManager.cs
 // 放置路徑建議: Assets/Scripts/Managers/SceneContextManager.cs
 
@@ -138,6 +137,25 @@ public class SceneContextManager : MonoBehaviour
             if ((roomCenter - centerPosition).sqrMagnitude <= visibilityRadiusSqr)
             {
                 LandmarkContextInfo roomAsLandmark = roomData.ToRoomAsLandmarkContextInfo();
+                
+                // *** 新增：將 RoomDataComponent 的入口轉換並添加到 LandmarkContextInfo ***
+                if (roomData.entrances != null && roomData.entrances.Count > 0)
+                {
+                    if (roomAsLandmark.entrancePositions == null) // 確保列表已初始化
+                    {
+                        roomAsLandmark.entrancePositions = new List<Position>();
+                    }
+                    foreach (var entranceCollider in roomData.entrances)
+                    {
+                        if (entranceCollider != null)
+                        {
+                            Vector3 entrancePosVec3 = entranceCollider.bounds.center;
+                            roomAsLandmark.entrancePositions.Add(new Position { x = entrancePosVec3.x, y = entrancePosVec3.y });
+                        }
+                    }
+                }
+                // *** 新增結束 ***
+
                 if (!addedLandmarkNames.Contains(roomAsLandmark.landmark_name))
                 {
                     visibleLandmarks.Add(roomAsLandmark);
@@ -166,7 +184,11 @@ public class SceneContextManager : MonoBehaviour
                 // RoomDataComponent.ToRoomAsLandmarkContextInfo() 使用的是 roomName。
                 if (!addedLandmarkNames.Contains(landmarkData.landmarkName))
                 {
-                    visibleLandmarks.Add(landmarkData.ToLandmarkContextInfo());
+                    LandmarkContextInfo lmkInfo = landmarkData.ToLandmarkContextInfo();
+                    // 如果獨立地標也有入口的概念（例如一個大物件有特定接近點），可以在其 LandmarkDataComponent 中
+                    // 類似地定義一些 `public List<Transform> approachPoints;` 並在這裡轉換和填充 lmkInfo.entrancePositions
+                    // 不過目前 LandmarkDataComponent 沒有此設計，所以這裡 entrancePositions 會是空的。
+                    visibleLandmarks.Add(lmkInfo);
                     addedLandmarkNames.Add(landmarkData.landmarkName);
                 }
                 // 如果允許物品同時作為房間內容描述和獨立地標出現，可以移除 !addedLandmarkNames.Contains 的檢查，

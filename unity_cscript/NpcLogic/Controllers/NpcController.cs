@@ -10,6 +10,7 @@ using NpcApiModels;
 using System.Linq; // For LINQ operations like TakeLast
 using System; // For DateTime
 using TMPro; // 引用 TextMeshPro
+using System.Text.RegularExpressions; // For Regex matching
 
 // 輔助列舉來管理 NPC 的主要狀態
 public enum NpcBehaviorState
@@ -19,13 +20,14 @@ public enum NpcBehaviorState
     MovingToTarget,         // 正在向 LLM 決定的目標點移動
     ApproachingInteraction, // NPC 主動接近其他角色以發起對話
     Interacting,            // 正在進行對話 (UI 顯示，等待玩家或其他 NPC 回應)
-    PostInteractionPause    // 對話結束後的短暫停頓
+    PostInteractionPause,   // 對話結束後的短暫停頓
+    WaitingNearTarget       // 在目標附近等待資源可用
 }
 
 [RequireComponent(typeof(CharacterData))]
-[RequireComponent(typeof(Rigidbody2D))] // 用於物理交互和觸發器檢測
-[RequireComponent(typeof(Collider2D))]  // NPC 自身的主要碰撞體或互動觸發器的根碰撞體
-[RequireComponent(typeof(NpcMovement))] // 現在明確要求 NpcMovement 組件
+[RequireComponent(typeof(Rigidbody2D))]
+[RequireComponent(typeof(Collider2D))]
+[RequireComponent(typeof(NpcMovement))]
 public class NpcController : MonoBehaviour
 {
     [Header("NPC Core Configuration")]
@@ -55,6 +57,13 @@ public class NpcController : MonoBehaviour
     [Tooltip("對話氣泡預設顯示時間（秒）。")]
     public float dialogueDisplayTime = 4.0f;
 
+    [Header("Social Behavior Settings")]
+    [Tooltip("NPC 在長時間空閒後，主動尋求社交的機率 (0-1)。0 表示從不。")]
+    [Range(0f, 1f)]
+    public float proactiveSocialChance = 0.25f;
+    [Tooltip("NPC 認為空閒了多久可以考慮主動社交（秒）。")]
+    public float idleTimeToConsiderSocializing = 60.0f;
+
 
     [Header("Context Providers (Assign from Scene Managers)")]
     [Tooltip("對 GameTimeManager 的引用，用於獲取當前遊戲時間。")]
@@ -62,12 +71,12 @@ public class NpcController : MonoBehaviour
     [Tooltip("對 SceneContextManager 的引用，用於獲取地標和其他角色列表。")]
     public SceneContextManager sceneContextManager;
     [Tooltip("對全域 DialogueUIManager 的引用（如果仍需用於非 NPC 系統訊息）。可選。")]
-    public DialogueUIManager dialogueUIManager; // 保留可選的全域 UI 管理器
+    public DialogueUIManager dialogueUIManager;
 
     // --- 內部狀態 ---
     private CharacterData _characterData;
     private Rigidbody2D _rb;
-    private NpcMovement _npcMovement; // 引用 NpcMovement 組件
+    private NpcMovement _npcMovement;
     private NpcBehaviorState _currentState = NpcBehaviorState.Idle;
     private float _decisionTimer = 0f;
     private Vector3 _currentMovementTargetWorld;
@@ -86,16 +95,24 @@ public class NpcController : MonoBehaviour
     private TextMeshProUGUI _dialogueTextTMP;
     private GameObject _currentDialogueBubbleInstance;
     private Coroutine _hideBubbleCoroutine;
-    private LandmarkDataComponent _currentActiveLandmarkZone = null; // Track the zone NPC is currently in
+    private LandmarkDataComponent _currentActiveLandmarkZone = null;
+
+    // 等待狀態相關變數
+    private LandmarkDataComponent _originalTargetLandmarkForWaiting = null;
+    private float _waitingTimer = 0f;
+    private const float MaxWaitTimeNearTarget = 20.0f;
+    private const float RecheckTargetInterval = 3.0f;
+    private float _nextRecheckTime = 0f;
+    private float _timeSpentIdle = 0f;
 
 
-    // Constants for dynamic status notes (與 LandmarkDataComponent.cs 中的定義匹配)
-    private const string OccupancyStatusPrefix = "occupancy_"; // 例如 "occupancy_occupied", "occupancy_vacant"
-    private const string OccupancyStatusOccupied = "occupancy_occupied"; // 泛指被佔用
+    // Constants for dynamic status notes
+    private const string OccupancyStatusPrefix = "occupancy_";
+    private const string OccupancyStatusOccupied = "occupancy_occupied";
     private string GetOccupancyStatusOccupiedBySelf() => $"{OccupancyStatusOccupied}_by_{_characterData.npcId}";
 
 
-    private const string OwnerPresenceStatusPrefix = "owner_presence_"; // 例如 "owner_presence_present", "owner_presence_absent"
+    private const string OwnerPresenceStatusPrefix = "owner_presence_";
     private const string OwnerPresencePresent = "owner_presence_present";
     private const string OwnerPresenceAbsent = "owner_presence_absent";
 
@@ -117,15 +134,14 @@ public class NpcController : MonoBehaviour
             Debug.LogError($"[{gameObject.name}] NpcController requires an NpcMovement component. Please add one.", this);
             enabled = false; return;
         }
-        // 將 NpcController 的設定傳遞給 NpcMovement 組件
+
         _npcMovement.moveSpeed = this.moveSpeed;
         _npcMovement.arrivalDistance = this.arrivalThreshold;
-        _npcMovement.rotationSpeed = 360f; // 可以考慮也作為 NpcController 的公開欄位
+        _npcMovement.rotationSpeed = 360f;
         if (visualModelTransform != null)
         {
             _npcMovement.visualModelToRotate = this.visualModelTransform;
         }
-
 
         if (_characterData == null) {
             Debug.LogError($"[{gameObject.name}] NpcController requires a CharacterData component. Disabling.", this);
@@ -197,6 +213,7 @@ public class NpcController : MonoBehaviour
     void Start()
     {
         _decisionTimer = UnityEngine.Random.Range(decisionInterval * 0.1f, decisionInterval * 0.75f);
+        _timeSpentIdle = 0f;
         ChangeState(NpcBehaviorState.Idle);
     }
 
@@ -210,7 +227,7 @@ public class NpcController : MonoBehaviour
                 HandleIdleState();
                 break;
             case NpcBehaviorState.RequestingDecision:
-                // No continuous update logic here, it's event-driven by API response
+                // Logic is event-driven by API response
                 break;
             case NpcBehaviorState.MovingToTarget:
                 HandleMovingToTargetState();
@@ -219,26 +236,30 @@ public class NpcController : MonoBehaviour
                 HandleApproachingInteractionState();
                 break;
             case NpcBehaviorState.Interacting:
-                // No continuous update logic here, it's event-driven by API response or timer
+                // Logic is event-driven
                 break;
             case NpcBehaviorState.PostInteractionPause:
                 // Logic handled by coroutine
+                break;
+            case NpcBehaviorState.WaitingNearTarget:
+                HandleWaitingNearTargetState();
                 break;
         }
     }
 
     void ChangeState(NpcBehaviorState newState)
     {
-        if (_currentState == newState && newState != NpcBehaviorState.RequestingDecision) return; // Avoid redundant state changes, allow re-requesting
+        if (_currentState == newState && newState != NpcBehaviorState.RequestingDecision) return;
         // Debug.Log($"<color=#ADD8E6>[{_characterData.characterName}] State: {_currentState} -> {newState}</color>");
+        NpcBehaviorState previousState = _currentState;
         _currentState = newState;
 
-        // Stop movement if entering a state that shouldn't have movement by default
         if (newState == NpcBehaviorState.Idle ||
-            newState == NpcBehaviorState.ApproachingInteraction || // Movement is set specifically in HandleApproachingInteractionState
+            newState == NpcBehaviorState.ApproachingInteraction ||
             newState == NpcBehaviorState.Interacting ||
             newState == NpcBehaviorState.PostInteractionPause ||
-            newState == NpcBehaviorState.RequestingDecision) // Stop any prior movement before new decision
+            newState == NpcBehaviorState.WaitingNearTarget ||
+            newState == NpcBehaviorState.RequestingDecision)
         {
             if (_npcMovement != null && _npcMovement.IsMoving())
             {
@@ -250,25 +271,47 @@ public class NpcController : MonoBehaviour
         {
             case NpcBehaviorState.Idle:
                 _hasMovementTarget = false;
-                // _decisionTimer is handled by HandleIdleState
+                _originalTargetLandmarkForWaiting = null;
+                _waitingTimer = 0f;
+                _timeSpentIdle = 0f;
                 break;
             case NpcBehaviorState.MovingToTarget:
-                 _currentTargetInteractionCharacter = null; // No longer approaching a specific character for dialogue
-                // Movement target is set by RequestMovementDecisionAsync
+                 _currentTargetInteractionCharacter = null;
+                 if (previousState != NpcBehaviorState.WaitingNearTarget) {
+                    _originalTargetLandmarkForWaiting = null;
+                 }
+                _timeSpentIdle = 0f;
                 break;
              case NpcBehaviorState.ApproachingInteraction:
-                _hasMovementTarget = false; // Specific approach logic handles movement
-                // Target character is set before changing to this state
+                _hasMovementTarget = false;
+                _originalTargetLandmarkForWaiting = null;
+                _timeSpentIdle = 0f;
                 break;
             case NpcBehaviorState.Interacting:
-                _hasMovementTarget = false; // Not moving while interacting
-                _decisionTimer = 0f; // Reset decision timer, will evaluate after PostInteractionPause
+                _hasMovementTarget = false;
+                _originalTargetLandmarkForWaiting = null;
+                _decisionTimer = 0f;
+                _timeSpentIdle = 0f;
                 break;
             case NpcBehaviorState.PostInteractionPause:
+                _originalTargetLandmarkForWaiting = null;
+                _timeSpentIdle = 0f;
                 StartCoroutine(PostInteractionPauseCoroutine());
                 break;
             case NpcBehaviorState.RequestingDecision:
-                // State where NPC is waiting for API response. No specific actions here yet.
+                _timeSpentIdle = 0f;
+                break;
+            case NpcBehaviorState.WaitingNearTarget:
+                _hasMovementTarget = false;
+                _decisionTimer = 0f;
+                _waitingTimer = 0f;
+                _nextRecheckTime = Time.time + RecheckTargetInterval;
+                _timeSpentIdle = 0f;
+                if(_originalTargetLandmarkForWaiting != null) {
+                    // Debug.Log($"<color=#FFFF00>[{_characterData.characterName}] State: Now WaitingNearTarget for '{_originalTargetLandmarkForWaiting.landmarkName}'</color>");
+                } else {
+                     Debug.LogWarning($"<color=yellow>[{_characterData.characterName}] State: Entered WaitingNearTarget but _originalTargetLandmarkForWaiting is NULL!</color>");
+                }
                 break;
         }
     }
@@ -276,95 +319,144 @@ public class NpcController : MonoBehaviour
     void HandleIdleState()
     {
         _decisionTimer += Time.deltaTime;
-        if (_decisionTimer >= decisionInterval && !_isApiCallInProgress)
+        _timeSpentIdle += Time.deltaTime;
+
+        bool shouldTriggerDecision = false;
+        string decisionReasonContext = null;
+
+        if (_decisionTimer >= decisionInterval)
         {
-            _decisionTimer = 0f; // Reset before new request
-            RequestMovementDecisionAsync();
+            shouldTriggerDecision = true;
+            decisionReasonContext = "Regular decision interval reached.";
+        }
+        else if (_timeSpentIdle >= idleTimeToConsiderSocializing && proactiveSocialChance > 0f && UnityEngine.Random.value < proactiveSocialChance)
+        {
+            // Debug.Log($"<color=cyan>[{_characterData.characterName}] Considering proactive social interaction after idle time.</color>");
+            decisionReasonContext = "Feeling social after being idle, looking for interaction or a common area to hang out.";
+            shouldTriggerDecision = true;
+        }
+
+        if (shouldTriggerDecision && !_isApiCallInProgress)
+        {
+            _decisionTimer = 0f;
+            _timeSpentIdle = 0f;
+            _lastMovementAbortReason = decisionReasonContext;
+            RequestMovementDecisionAsync(true);
         }
     }
 
     void HandleMovingToTargetState()
     {
-        if (!_hasMovementTarget) { // Should have a target if in this state
-            ChangeState(NpcBehaviorState.Idle); return;
+        if (!_hasMovementTarget) {
+            // Debug.LogWarning($"[{_characterData.characterName}] In MovingToTarget state but no movement target. Returning to Idle.");
+            ChangeState(NpcBehaviorState.Idle);
+            return;
         }
-        // NpcMovement component handles arrival detection via its callback or by IsMoving() becoming false.
-        // If NpcMovement.SetMoveTarget was given a callback, that callback would handle arrival.
-        // If not, we check if NpcMovement has stopped.
+
         if (_npcMovement != null && !_npcMovement.IsMoving())
         {
-            // This block executes if NpcMovement reports it's no longer moving.
-            // This implies it has reached its target (or was stopped externally).
-            // NpcMovement should ideally handle precise arrival internally.
-            // We double-check distance here as a safeguard or if no callback was used with NpcMovement.
             Vector3 currentPosition = transform.position;
             Vector3 targetOnPlane = new Vector3(_currentMovementTargetWorld.x, _currentMovementTargetWorld.y, currentPosition.z);
 
-            // Use NpcMovement's arrivalDistance for consistency
-            if (Vector2.Distance(new Vector2(currentPosition.x, currentPosition.y), new Vector2(targetOnPlane.x, targetOnPlane.y)) <= _npcMovement.arrivalDistance * 1.1f) // Allow slight overshoot
+            if (Vector2.Distance(new Vector2(currentPosition.x, currentPosition.y), new Vector2(targetOnPlane.x, targetOnPlane.y)) <= _npcMovement.arrivalDistance * 1.2f)
             {
-                Debug.Log($"<color=green>[{_characterData.characterName}] Arrived at LLM target: ({targetOnPlane.x:F1}, {targetOnPlane.y:F1}) as NpcMovement stopped near target.</color>");
-                _hasMovementTarget = false;
-                UpdateLandmarkStatusOnArrivalOrDeparture(_currentMovementTargetWorld, true); // Notify arrival at target
-                ChangeState(NpcBehaviorState.Idle);
+                // Debug.LogWarning($"[{_characterData.characterName}] NpcMovement stopped AND target reached (Update check). Invoking HandleArrival.");
+                HandleArrivalAtMovementTarget(_currentMovementTargetWorld, _originalTargetLandmarkForWaiting == null);
             }
             else
             {
-                // This case means NpcMovement stopped, but we are not at the target.
-                // Could be due to external StopMovement() call or an issue with NpcMovement.
-                Debug.LogWarning($"[{_characterData.characterName}] NpcMovement stopped but not at arrival threshold for LLM target. Pos: {currentPosition}, Target: {targetOnPlane}. Dist: {Vector2.Distance(new Vector2(currentPosition.x, currentPosition.y), new Vector2(targetOnPlane.x, targetOnPlane.y)):F2}. Returning to Idle.");
+                Debug.LogWarning($"[{_characterData.characterName}] NpcMovement stopped but NOT at target in Update. Pos: {currentPosition}, Target: {targetOnPlane}. Dist: {Vector2.Distance(new Vector2(currentPosition.x, currentPosition.y), new Vector2(targetOnPlane.x, targetOnPlane.y)):F2}. Returning to Idle.");
                 _hasMovementTarget = false;
-                // Do not call UpdateLandmarkStatusOnArrivalOrDeparture if not actually arrived at the intended target landmark
                 ChangeState(NpcBehaviorState.Idle);
             }
         }
-        // Visual rotation can be handled by NpcMovement itself if visualModelToRotate is assigned to it.
+    }
+
+    private void HandleArrivalAtMovementTarget(Vector3 arrivedAtPosition, bool wasFromLLMDecisionPipelineOrFreshTarget)
+    {
+        string source = wasFromLLMDecisionPipelineOrFreshTarget ? "LLM Decision Pipeline/Fresh Target" : "Post-Waiting Original Target";
+        // Debug.Log($"<color=#32CD32>[{_characterData.characterName}] HandleArrivalAtMovementTarget: Arrived at ({arrivedAtPosition.x:F1}, {arrivedAtPosition.y:F1}). Source: {source}. CurrentState: {_currentState}</color>");
+        _hasMovementTarget = false;
+
+        if (_originalTargetLandmarkForWaiting != null && _currentState != NpcBehaviorState.WaitingNearTarget)
+        {
+            bool originalTargetIsStillUnavailable = false;
+            if (_originalTargetLandmarkForWaiting.landmarkTypeTag == "bathroom" &&
+                _originalTargetLandmarkForWaiting.HasDynamicStatusWithPrefix(OccupancyStatusPrefix) &&
+                _originalTargetLandmarkForWaiting.HasDynamicStatus(OccupancyStatusOccupied) &&
+                !_originalTargetLandmarkForWaiting.HasDynamicStatus(GetOccupancyStatusOccupiedBySelf()))
+            {
+                originalTargetIsStillUnavailable = true;
+            }
+
+            if (originalTargetIsStillUnavailable) {
+                // Debug.Log($"<color=yellow>[{_characterData.characterName}] Arrived at waiting spot for '{_originalTargetLandmarkForWaiting.landmarkName}' which is still unavailable. Transitioning to WaitingNearTarget state.</color>");
+                UpdateLandmarkStatusOnArrivalOrDeparture(arrivedAtPosition, true);
+                ChangeState(NpcBehaviorState.WaitingNearTarget);
+                return;
+            } else {
+                if (wasFromLLMDecisionPipelineOrFreshTarget) {
+                    // Debug.Log($"<color=green>[{_characterData.characterName}] Arrived at suggested waiting spot, but original target '{_originalTargetLandmarkForWaiting.landmarkName}' is now available or no longer needs waiting. Will attempt to go to original target.</color>");
+                    Vector3 originalTargetPos = _originalTargetLandmarkForWaiting.transform.position;
+                     _currentMovementTargetWorld = new Vector3(originalTargetPos.x, originalTargetPos.y, transform.position.z);
+                    _hasMovementTarget = true;
+                    if (_npcMovement != null) {
+                        _npcMovement.SetMoveTarget(_currentMovementTargetWorld, () => {
+                            HandleArrivalAtMovementTarget(_currentMovementTargetWorld, false);
+                        });
+                    }
+                    ChangeState(NpcBehaviorState.MovingToTarget);
+                    return;
+                } else {
+                    // Debug.Log($"<color=green>[{_characterData.characterName}] Successfully arrived at original target '{_originalTargetLandmarkForWaiting.landmarkName}' after waiting.</color>");
+                    _originalTargetLandmarkForWaiting = null;
+                }
+            }
+        }
+
+        UpdateLandmarkStatusOnArrivalOrDeparture(arrivedAtPosition, true);
+        ChangeState(NpcBehaviorState.Idle);
     }
 
     void HandleApproachingInteractionState()
     {
         if (_currentTargetInteractionCharacter == null) {
             Debug.LogWarning($"[{_characterData.characterName}] Target for interaction is null. Returning to Idle.");
+            _originalTargetLandmarkForWaiting = null;
             ChangeState(NpcBehaviorState.Idle); return;
         }
 
         Vector3 targetCharPos = _currentTargetInteractionCharacter.transform.position;
         Vector3 directionToChar = (targetCharPos - transform.position).normalized;
-        // Approach a point slightly offset from the character to avoid overlapping, respecting dialogueInitiationDistance
-        Vector3 pointToApproach = targetCharPos - directionToChar * (dialogueInitiationDistance * 0.9f); 
-        pointToApproach.z = transform.position.z; // Ensure Z is correct for 2D
+        Vector3 pointToApproach = targetCharPos - directionToChar * (dialogueInitiationDistance * 0.9f);
+        pointToApproach.z = transform.position.z;
 
         float distanceToCharActual = Vector2.Distance(new Vector2(transform.position.x, transform.position.y), new Vector2(targetCharPos.x, targetCharPos.y));
 
         if (distanceToCharActual <= dialogueInitiationDistance)
         {
-            // Already within dialogue range or have reached it
-            if (_npcMovement != null && _npcMovement.IsMoving()) _npcMovement.StopMovement(); // Stop if was moving
-            Debug.Log($"<color=orange>[{_characterData.characterName}] Reached/within dialogue range of '{_currentTargetInteractionCharacter.characterName}'. Actual dist: {distanceToCharActual:F1}. Starting dialogue.</color>");
+            if (_npcMovement != null && _npcMovement.IsMoving()) _npcMovement.StopMovement();
+            // Debug.Log($"<color=orange>[{_characterData.characterName}] Reached/within dialogue range of '{_currentTargetInteractionCharacter.characterName}'. Actual dist: {distanceToCharActual:F1}. Starting dialogue.</color>");
             StartDialogueAsync(_currentTargetInteractionCharacter);
         }
-        // If not already moving towards this specific approach point, or target changed significantly
-        else if (_npcMovement != null && (!_npcMovement.IsMoving() || Vector3.Distance(_npcMovement.CurrentTargetPosition, pointToApproach) > 0.5f) ) // 0.5f is a threshold to re-evaluate if target shifted much
+        else if (_npcMovement != null && (!_npcMovement.IsMoving() || Vector3.Distance(_npcMovement.CurrentTargetPosition, pointToApproach) > 0.5f) )
         {
              _npcMovement.SetMoveTarget(pointToApproach, () => {
-                // This onArrival callback is for NpcMovement successfully reaching the approach point
                 float finalDist = Vector2.Distance(new Vector2(transform.position.x, transform.position.y), new Vector2(_currentTargetInteractionCharacter.transform.position.x, _currentTargetInteractionCharacter.transform.position.y));
-                Debug.Log($"<color=orange>[{_characterData.characterName}] NpcMovement arrived at approach point for '{_currentTargetInteractionCharacter.characterName}'. Final dist to char: {finalDist:F1}. Starting dialogue.</color>");
-                // Ensure we are truly in range now (character might have moved slightly)
-                if (finalDist <= dialogueInitiationDistance * 1.1f) // Allow slight tolerance
+                // Debug.Log($"<color=orange>[{_characterData.characterName}] NpcMovement arrived at approach point for '{_currentTargetInteractionCharacter.characterName}'. Final dist to char: {finalDist:F1}.</color>");
+                if (finalDist <= dialogueInitiationDistance * 1.1f)
                 {
                     StartDialogueAsync(_currentTargetInteractionCharacter);
                 }
                 else
                 {
                     Debug.LogWarning($"[{_characterData.characterName}] Approached point for '{_currentTargetInteractionCharacter.characterName}', but character moved out of dialogue range ({finalDist:F1} > {dialogueInitiationDistance * 1.1f}). Re-evaluating (Idle).");
+                     _originalTargetLandmarkForWaiting = null;
                     ChangeState(NpcBehaviorState.Idle);
                 }
             });
         }
-        // If NpcMovement is already moving towards a valid approach point, let it continue. Its callback will handle arrival.
     }
-
 
     private IEnumerator PostInteractionPauseCoroutine()
     {
@@ -372,34 +464,32 @@ public class NpcController : MonoBehaviour
         ChangeState(NpcBehaviorState.Idle);
     }
 
-    async void RequestMovementDecisionAsync(bool isReEvaluationDueToBlock = false)
+    async void RequestMovementDecisionAsync(bool isReEvaluationDueToReason = false)
     {
         if (_isApiCallInProgress) {
             Debug.LogWarning($"[{_characterData.characterName}] Movement decision request skipped: Another API call in progress.");
             return;
         }
-        
-        // It's crucial that _characterData is valid here.
-        // If _characterData could become null due to destruction, this method shouldn't be called or should guard earlier.
-        // The MissingReferenceException happened *after* the await, so _characterData was likely valid here.
 
-        // Update status of current zone BEFORE deciding to move (departure logic)
-        // This needs to happen before any `await` if `transform.position` is used and the object might be destroyed.
-        // However, if `this` is null later, this call might have been on a destroyed object too.
-        // For safety, we ensure 'this' is valid before this call.
         if (this == null || gameObject == null || !enabled) {
              Debug.LogWarning($"[NpcController RequestMovementDecisionAsync Start] Instance or GameObject was destroyed/disabled before starting. Aborting.");
-            _isApiCallInProgress = false; // Ensure this is reset if we bail early
+            _isApiCallInProgress = false;
             return;
         }
-        UpdateLandmarkStatusOnArrivalOrDeparture(transform.position, false);
 
+        if (!isReEvaluationDueToReason)
+        {
+            _originalTargetLandmarkForWaiting = null;
+            _lastMovementAbortReason = null;
+        }
+
+        UpdateLandmarkStatusOnArrivalOrDeparture(transform.position, false);
 
         ChangeState(NpcBehaviorState.RequestingDecision);
         _isApiCallInProgress = true;
 
-        NpcIdentifier selfIdentifier = _characterData.GetNpcIdentifier(); // Potential NRE if _characterData is null
-        Position currentNpcPos = new Position { x = transform.position.x, y = transform.position.y }; // Potential NRE if transform is gone
+        NpcIdentifier selfIdentifier = _characterData.GetNpcIdentifier();
+        Position currentNpcPos = new Position { x = transform.position.x, y = transform.position.y };
         GameTime currentGameTime = gameTimeManager != null ? gameTimeManager.GetCurrentGameTime() : new GameTime { current_timestamp = DateTime.UtcNow.ToString("o"), time_of_day = "unknown_time" };
 
         List<EntityContextInfo> nearbyEntities = sceneContextManager?.GetNearbyEntities(selfIdentifier.npc_id, transform.position, 20f) ?? new List<EntityContextInfo>();
@@ -413,11 +503,13 @@ public class NpcController : MonoBehaviour
             dialogueSummary = string.Join("\n", recentTurns.Select(t => $"{(t.name ?? t.npc_id)}: \"{t.message_original_language}\""));
         }
 
-        string augmentedContextForLLM = dialogueSummary;
-        if(isReEvaluationDueToBlock && !string.IsNullOrEmpty(_lastMovementAbortReason)){
-            augmentedContextForLLM = $"My previous attempt to move was blocked. Reason: '{_lastMovementAbortReason}'. I need to decide on a new action or destination considering this. " +
-                                     (string.IsNullOrEmpty(dialogueSummary) ? "There was no other recent dialogue." : $"Recent dialogue was: {dialogueSummary}");
+        string augmentedContextForLLM = (isReEvaluationDueToReason && !string.IsNullOrEmpty(_lastMovementAbortReason))
+                                        ? _lastMovementAbortReason
+                                        : dialogueSummary;
+        if(isReEvaluationDueToReason && !string.IsNullOrEmpty(_lastMovementAbortReason) && !string.IsNullOrEmpty(dialogueSummary) && augmentedContextForLLM != _lastMovementAbortReason){
+            augmentedContextForLLM = $"Reason for re-evaluation/current intent: '{_lastMovementAbortReason}'. Recent dialogue: {dialogueSummary}";
         }
+
 
         NpcMovementRequest requestPayload = new NpcMovementRequest {
             npc_id = selfIdentifier.npc_id, name = selfIdentifier.name,
@@ -428,59 +520,88 @@ public class NpcController : MonoBehaviour
         };
 
         string charNameForLog = _characterData != null ? _characterData.characterName : (selfIdentifier != null ? selfIdentifier.name : "NpcController (unknown)");
-        Debug.Log($"<color=cyan>[{charNameForLog}] Requesting MOVEMENT. Re-eval: {isReEvaluationDueToBlock}. Context: '{requestPayload.recent_dialogue_summary_for_movement?.Substring(0, Mathf.Min(requestPayload.recent_dialogue_summary_for_movement?.Length ?? 0, 100))}...'</color>");
-        
+        // Debug.Log($"<color=cyan>[{charNameForLog}] Requesting MOVEMENT. Re-eval Reason: {isReEvaluationDueToReason}. Context: '{requestPayload.recent_dialogue_summary_for_movement?.Substring(0, Mathf.Min(requestPayload.recent_dialogue_summary_for_movement?.Length ?? 0, 100))}...'</color>");
+
         NpcMovementResponse response = await ApiService.PostAsync<NpcMovementRequest, NpcMovementResponse>("/npc/think", requestPayload);
 
-        // *** ADDED CHECK for MissingReferenceException ***
         if (this == null || gameObject == null || !enabled)
         {
             string npcNameForLogAfterAwait = _characterData != null ? _characterData.characterName : (selfIdentifier != null ? selfIdentifier.name : "NpcController (unknown)");
-            Debug.LogWarning($"[{npcNameForLogAfterAwait}] NpcController or its GameObject was destroyed or disabled during API call to /npc/think. Aborting further processing in RequestMovementDecisionAsync.");
-            _isApiCallInProgress = false; // Attempt to reset state
-            return; 
+            Debug.LogWarning($"[{npcNameForLogAfterAwait}] NpcController or its GameObject was destroyed or disabled during API call to /npc/think. Aborting further processing.");
+            _isApiCallInProgress = false;
+            return;
         }
-        // *** END ADDED CHECK ***
 
-        _isApiCallInProgress = false; 
-        _lastMovementAbortReason = null;
+        _isApiCallInProgress = false;
 
         if (response != null && response.target_destination != null) {
-            Debug.Log($"<color=#90EE90>[{_characterData.characterName}] Movement decision RX. Action: '{response.chosen_action_summary}'. Target: ({response.target_destination.x:F1}, {response.target_destination.y:F1})</color>");
+            // Debug.Log($"<color=#90EE90>[{_characterData.characterName}] Movement decision RX. Action: '{response.chosen_action_summary}'. Target: ({response.target_destination.x:F1}, {response.target_destination.y:F1})</color>");
             Vector3 potentialTargetWorld = new Vector3(response.target_destination.x, response.target_destination.y, transform.position.z);
 
-            bool canProceedToTarget = true;
-            string currentAbortReason = "";
-            LandmarkDataComponent targetLocationMeta = FindTargetLandmark(potentialTargetWorld);
+            bool canProceedToTargetDirectly = true;
+            string currentAbortReasonForDirectMove = "";
+            LandmarkDataComponent targetLocationMetaAtPotentialTarget = FindTargetLandmark(potentialTargetWorld);
 
-            if (targetLocationMeta != null)
+            bool isBackendSuggestedWait = response.chosen_action_summary != null &&
+                                          response.chosen_action_summary.ToLower().Contains("wait near");
+
+            if (isBackendSuggestedWait)
             {
-                if (targetLocationMeta.landmarkTypeTag == "bathroom" &&
-                    targetLocationMeta.HasDynamicStatusWithPrefix(OccupancyStatusPrefix) && 
-                    targetLocationMeta.HasDynamicStatus(OccupancyStatusOccupied) &&        
-                    !targetLocationMeta.HasDynamicStatus(GetOccupancyStatusOccupiedBySelf())) 
-                {
-                    canProceedToTarget = false;
-                    currentAbortReason = "Toilet is occupied by someone else.";
+                string originalTargetNameFromAction = ParseOriginalTargetFromWaitingAction(response.chosen_action_summary);
+                if (!string.IsNullOrEmpty(originalTargetNameFromAction)) {
+                    _originalTargetLandmarkForWaiting = sceneContextManager?.GetAllIndividualLandmarkDataComponents()
+                                                                     .FirstOrDefault(lm => lm.landmarkName.Equals(originalTargetNameFromAction, StringComparison.OrdinalIgnoreCase));
+                    if (_originalTargetLandmarkForWaiting == null) {
+                         var roomComp = sceneContextManager?.GetAllRoomDataComponents()
+                                                            .FirstOrDefault(r => r.roomName.Equals(originalTargetNameFromAction, StringComparison.OrdinalIgnoreCase));
+                         if (roomComp != null) _originalTargetLandmarkForWaiting = roomComp.GetComponent<LandmarkDataComponent>();
+                    }
+
+                     if (_originalTargetLandmarkForWaiting != null) {
+                        // Debug.Log($"<color=#FFDEAD>[{_characterData.characterName}] Backend suggested moving to a waiting spot for original target '{originalTargetNameFromAction}'. Waiting spot is new target.</color>");
+                     } else {
+                        Debug.LogWarning($"<color=yellow>[{_characterData.characterName}] Backend suggested waiting for '{originalTargetNameFromAction}', but landmark not found in scene. Proceeding with backend target as is.</color>");
+                        _originalTargetLandmarkForWaiting = null;
+                     }
+                } else {
+                     Debug.LogWarning($"<color=yellow>[{_characterData.characterName}] Backend action summary '{response.chosen_action_summary}' implies waiting, but could not parse original target name.</color>");
+                     _originalTargetLandmarkForWaiting = null;
                 }
-                else if (targetLocationMeta.landmarkTypeTag == "bedroom" &&
-                         !string.IsNullOrEmpty(targetLocationMeta.ownerNpcId) &&
-                         targetLocationMeta.ownerNpcId != _characterData.npcId &&
-                         targetLocationMeta.HasDynamicStatus(OwnerPresenceAbsent))
+            }
+            else
+            {
+                if (!isReEvaluationDueToReason)
                 {
-                    canProceedToTarget = false;
-                    currentAbortReason = $"Room '{targetLocationMeta.landmarkName}' is private and owner '{targetLocationMeta.ownerNpcId}' is absent.";
+                    _originalTargetLandmarkForWaiting = null;
+                }
+                if (targetLocationMetaAtPotentialTarget != null)
+                {
+                    if (targetLocationMetaAtPotentialTarget.landmarkTypeTag == "bathroom" &&
+                        targetLocationMetaAtPotentialTarget.HasDynamicStatusWithPrefix(OccupancyStatusPrefix) &&
+                        targetLocationMetaAtPotentialTarget.HasDynamicStatus(OccupancyStatusOccupied) &&
+                        !targetLocationMetaAtPotentialTarget.HasDynamicStatus(GetOccupancyStatusOccupiedBySelf()))
+                    {
+                        canProceedToTargetDirectly = false;
+                        currentAbortReasonForDirectMove = $"Toilet '{targetLocationMetaAtPotentialTarget.landmarkName}' is occupied by someone else.";
+                    }
+                    else if (targetLocationMetaAtPotentialTarget.landmarkTypeTag == "bedroom" &&
+                             !string.IsNullOrEmpty(targetLocationMetaAtPotentialTarget.ownerNpcId) &&
+                             targetLocationMetaAtPotentialTarget.ownerNpcId != _characterData.npcId &&
+                             targetLocationMetaAtPotentialTarget.HasDynamicStatus(OwnerPresenceAbsent))
+                    {
+                        canProceedToTargetDirectly = false;
+                        currentAbortReasonForDirectMove = $"Room '{targetLocationMetaAtPotentialTarget.landmarkName}' is private and owner '{targetLocationMetaAtPotentialTarget.ownerNpcId}' is absent.";
+                    }
                 }
             }
 
-            if (!canProceedToTarget)
+            if (!canProceedToTargetDirectly)
             {
-                Debug.LogWarning($"<color=yellow>[{_characterData.characterName}] Cannot proceed to LLM target ({potentialTargetWorld.x:F1}, {potentialTargetWorld.y:F1}). Reason: {currentAbortReason}. Re-requesting.</color>");
-                _lastMovementAbortReason = currentAbortReason;
-                // Before re-requesting, ensure NPC is still valid to prevent infinite loop if destroyed.
+                // Debug.LogWarning($"<color=yellow>[{_characterData.characterName}] Cannot proceed directly to LLM target ({potentialTargetWorld.x:F1}, {potentialTargetWorld.y:F1}). Reason: {currentAbortReasonForDirectMove}. Re-requesting with block info.</color>");
+                _lastMovementAbortReason = currentAbortReasonForDirectMove;
                 if (this == null || gameObject == null || !enabled) {
                      Debug.LogWarning($"[{_characterData.characterName}] NPC destroyed before re-requesting movement due to block. Aborting re-request.");
-                     ChangeState(NpcBehaviorState.Idle); // Go to idle if cannot re-request
+                     ChangeState(NpcBehaviorState.Idle);
                      return;
                 }
                 RequestMovementDecisionAsync(true);
@@ -492,57 +613,149 @@ public class NpcController : MonoBehaviour
 
             if (_npcMovement != null) {
                  _npcMovement.SetMoveTarget(_currentMovementTargetWorld, () => {
-                    // This is NpcMovement's onArrival callback for LLM chosen target
-                    Debug.Log($"<color=green>[{_characterData.characterName}] Arrived at LLM target ({_currentMovementTargetWorld.x:F1}, {_currentMovementTargetWorld.y:F1}) via NpcMovement onArrival callback.</color>");
-                    _hasMovementTarget = false; // Mark as no longer having an active movement target
-                    UpdateLandmarkStatusOnArrivalOrDeparture(_currentMovementTargetWorld, true); // Notify arrival at target
-                    ChangeState(NpcBehaviorState.Idle); // Transition to Idle after arrival
+                    HandleArrivalAtMovementTarget(_currentMovementTargetWorld, true);
                  });
             } else {
                 Debug.LogError($"[{_characterData.characterName}] NpcMovement component is missing, cannot execute move!", this);
                 ChangeState(NpcBehaviorState.Idle); return;
             }
 
-
             if (response.updated_emotional_state_snapshot != null) {
                 _currentNpcEmotionalState = response.updated_emotional_state_snapshot;
-                Debug.Log($"<color=grey>[{_characterData.characterName}] Emotional state updated from API to: {_currentNpcEmotionalState.primary_emotion} (Intensity: {_currentNpcEmotionalState.intensity:F1})</color>");
+                // Debug.Log($"<color=grey>[{_characterData.characterName}] Emotional state updated from API to: {_currentNpcEmotionalState.primary_emotion} (Intensity: {_currentNpcEmotionalState.intensity:F1})</color>");
             }
 
             bool wasDialogueDriven = response.primary_decision_drivers.GetValueOrDefault("dialogue_driven", false);
+            bool wasSociallyDriven = response.primary_decision_drivers.GetValueOrDefault("social_interaction_considered", false) &&
+                                      (response.chosen_action_summary.ToLower().Contains("chat with") ||
+                                       response.chosen_action_summary.ToLower().Contains("talk to") ||
+                                       response.chosen_action_summary.ToLower().Contains("approach") ||
+                                       response.chosen_action_summary.ToLower().Contains("greet") ||
+                                       response.chosen_action_summary.ToLower().Contains("say hi to"));
 
-            if (wasDialogueDriven && _lastInteractedCharacter != null && !isReEvaluationDueToBlock) {
-                Debug.Log($"<color=magenta>[{_characterData.characterName}] Destination '{response.chosen_action_summary}' driven by dialogue with '{_lastInteractedCharacter.characterName}'. Confirming.</color>");
-                // Ensure NPC is still valid before starting new dialogue
-                if (this == null || gameObject == null || !enabled) {
-                     Debug.LogWarning($"[{_characterData.characterName}] NPC destroyed before starting follow-up dialogue. Aborting.");
-                     ChangeState(NpcBehaviorState.MovingToTarget); // Or Idle, but MovingToTarget was just set
-                     return;
-                }
-                StartDialogueAsync(_lastInteractedCharacter, $"Okay, based on our chat, I've decided to: {response.chosen_action_summary}. Sound good, {(_lastInteractedCharacter.characterName ?? "friend")}?", true);
-                // Note: StartDialogueAsync will change state, potentially overriding MovingToTarget if dialogue starts immediately.
-                // This might be okay if the confirmation dialogue is brief.
+
+            string finalActionSummary = response.chosen_action_summary;
+
+            if (wasDialogueDriven && _lastInteractedCharacter != null && !isReEvaluationDueToReason && !isBackendSuggestedWait) {
+                // Debug.Log($"<color=magenta>[{_characterData.characterName}] Destination '{finalActionSummary}' driven by dialogue with '{_lastInteractedCharacter.characterName}'. Confirming.</color>");
+                if (this == null || gameObject == null || !enabled) { ChangeState(NpcBehaviorState.MovingToTarget); return; }
+                StartDialogueAsync(_lastInteractedCharacter, $"Okay, based on our chat, I've decided to: {finalActionSummary}. Sound good, {(_lastInteractedCharacter.characterName ?? "friend")}?", true);
             }
-            else if (!string.IsNullOrEmpty(response.chosen_action_summary) && !wasDialogueDriven && response.chosen_action_summary.Length > 3 && !isReEvaluationDueToBlock)
+            else if (wasSociallyDriven && !isReEvaluationDueToReason)
             {
-                bool isGenericAction = response.chosen_action_summary.ToLower().Contains("explore") ||
-                                       response.chosen_action_summary.ToLower().Contains("wander") ||
-                                       response.chosen_action_summary.ToLower().Contains("idle") ||
-                                       response.chosen_action_summary.ToLower().Contains("nothing special");
+                string targetNpcName = ParseTargetNpcNameFromSocialAction(finalActionSummary); // *** Method call that caused error ***
+                if (!string.IsNullOrEmpty(targetNpcName))
+                {
+                    CharacterData socialTarget = FindCharacterByName(targetNpcName);
+                    if (socialTarget != null && socialTarget != _characterData)
+                    {
+                        // Debug.Log($"<color=cyan>[{_characterData.characterName}] LLM decided to socialize with '{targetNpcName}'. Approaching for interaction.</color>");
+                        _currentTargetInteractionCharacter = socialTarget;
+                         _originalTargetLandmarkForWaiting = null;
+                        ChangeState(NpcBehaviorState.ApproachingInteraction);
+                        ShowDialogueBubble_TMP($"I think I'll go say hi to {targetNpcName}.", dialogueDisplayTime * 0.9f);
+                        return; 
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"[{_characterData.characterName}] LLM wanted to socialize with '{targetNpcName}', but character not found or is self. Will move to target coordinates if any.");
+                         ShowDialogueBubble_TMP($"Hmm... I will {finalActionSummary.ToLower()}.", dialogueDisplayTime * 0.9f);
+                         if (_currentState != NpcBehaviorState.Interacting && _currentState != NpcBehaviorState.WaitingNearTarget && _currentState != NpcBehaviorState.ApproachingInteraction) {
+                            ChangeState(NpcBehaviorState.MovingToTarget);
+                        }
+                    }
+                } else {
+                     Debug.LogWarning($"[{_characterData.characterName}] LLM indicated social interaction but target NPC name could not be parsed from '{finalActionSummary}'. Moving to coordinates if specified.");
+                     ShowDialogueBubble_TMP($"Hmm... I will {finalActionSummary.ToLower()}.", dialogueDisplayTime * 0.9f);
+                     if (_currentState != NpcBehaviorState.Interacting && _currentState != NpcBehaviorState.WaitingNearTarget && _currentState != NpcBehaviorState.ApproachingInteraction) {
+                        ChangeState(NpcBehaviorState.MovingToTarget);
+                    }
+                }
+            }
+            else if (!string.IsNullOrEmpty(finalActionSummary) && finalActionSummary.Length > 3 && !isReEvaluationDueToReason)
+            {
+                bool isGenericAction = finalActionSummary.ToLower().Contains("explore") ||
+                                       finalActionSummary.ToLower().Contains("wander") ||
+                                       finalActionSummary.ToLower().Contains("idle") ||
+                                       finalActionSummary.ToLower().Contains("nothing special");
                 if (!isGenericAction)
                 {
-                    ShowDialogueBubble_TMP($"Hmm... I think I will {response.chosen_action_summary.ToLower()}.", dialogueDisplayTime * 0.75f);
+                    ShowDialogueBubble_TMP($"Hmm... I will {finalActionSummary.ToLower()}.", dialogueDisplayTime * (isBackendSuggestedWait ? 1.0f : 0.75f) );
                 }
-                ChangeState(NpcBehaviorState.MovingToTarget);
+
+                if (_currentState != NpcBehaviorState.Interacting && _currentState != NpcBehaviorState.WaitingNearTarget && _currentState != NpcBehaviorState.ApproachingInteraction) {
+                    ChangeState(NpcBehaviorState.MovingToTarget);
+                }
             }
-            else {
+            else if (_currentState != NpcBehaviorState.Interacting && _currentState != NpcBehaviorState.WaitingNearTarget && _currentState != NpcBehaviorState.ApproachingInteraction) {
                 ChangeState(NpcBehaviorState.MovingToTarget);
             }
         } else {
-            // Ensure _characterData is safe to access here if 'this' could be null due to earlier destruction
-            // The check after await should prevent reaching here if 'this' is null.
             Debug.LogError($"[{_characterData.characterName}] Failed to get valid movement decision from API or target was null. Returning to Idle.");
+            _originalTargetLandmarkForWaiting = null;
             ChangeState(NpcBehaviorState.Idle);
+        }
+    }
+
+    private void HandleWaitingNearTargetState()
+    {
+        _waitingTimer += Time.deltaTime;
+
+        if (_originalTargetLandmarkForWaiting == null) {
+            Debug.LogWarning($"[{_characterData.characterName}] In WaitingNearTarget state but _originalTargetLandmarkForWaiting is null. Returning to Idle.");
+            ChangeState(NpcBehaviorState.Idle);
+            return;
+        }
+
+        if (_waitingTimer > MaxWaitTimeNearTarget)
+        {
+            // Debug.Log($"<color=yellow>[{_characterData.characterName}] Waited too long for '{_originalTargetLandmarkForWaiting.landmarkName}'. Max wait time {MaxWaitTimeNearTarget}s exceeded. Re-evaluating (Idle).</color>");
+            string reason = $"Waited too long for '{_originalTargetLandmarkForWaiting.landmarkName}' to become available.";
+            _originalTargetLandmarkForWaiting = null;
+            _lastMovementAbortReason = reason;
+            ChangeState(NpcBehaviorState.Idle);
+            return;
+        }
+
+        if (Time.time >= _nextRecheckTime)
+        {
+            _nextRecheckTime = Time.time + RecheckTargetInterval;
+
+            // Debug.Log($"<color=grey>[{_characterData.characterName}] Re-checking availability of '{_originalTargetLandmarkForWaiting.landmarkName}' while waiting...</color>");
+            bool originalTargetNowAvailable = true;
+
+            if (_originalTargetLandmarkForWaiting.landmarkTypeTag == "bathroom")
+            {
+                if (_originalTargetLandmarkForWaiting.HasDynamicStatus(OccupancyStatusOccupied) &&
+                    !_originalTargetLandmarkForWaiting.HasDynamicStatus(GetOccupancyStatusOccupiedBySelf()))
+                {
+                    originalTargetNowAvailable = false;
+                }
+            }
+            // Add checks for other types of resources if necessary
+
+            if (originalTargetNowAvailable)
+            {
+                // Debug.Log($"<color=green>[{_characterData.characterName}] Original target '{_originalTargetLandmarkForWaiting.landmarkName}' is now available! Attempting to move to it.</color>");
+
+                Vector3 targetPos = _originalTargetLandmarkForWaiting.transform.position;
+
+                _currentMovementTargetWorld = new Vector3(targetPos.x, targetPos.y, transform.position.z);
+                _hasMovementTarget = true;
+                // _originalTargetLandmarkForWaiting is not cleared here yet.
+                // It will be cleared in HandleArrivalAtMovementTarget if arrival at the original target is successful.
+
+                if (_npcMovement != null) {
+                     _npcMovement.SetMoveTarget(_currentMovementTargetWorld, () => {
+                        HandleArrivalAtMovementTarget(_currentMovementTargetWorld, false); 
+                     });
+                }
+                ChangeState(NpcBehaviorState.MovingToTarget);
+            }
+            else
+            {
+                // Debug.Log($"<color=grey>[{_characterData.characterName}] Original target '{_originalTargetLandmarkForWaiting.landmarkName}' still unavailable. Continuing to wait.</color>");
+            }
         }
     }
 
@@ -552,20 +765,26 @@ public class NpcController : MonoBehaviour
              Debug.LogWarning($"[{_characterData.characterName}] Dialogue with '{otherCharacter.characterName}' skipped: API call in progress.");
             return;
         }
-        if (!isFollowUpDialogue && (_currentState == NpcBehaviorState.Interacting || _currentState == NpcBehaviorState.PostInteractionPause || _currentState == NpcBehaviorState.RequestingDecision) ) {
+        if (!isFollowUpDialogue && (
+            _currentState == NpcBehaviorState.Interacting ||
+            _currentState == NpcBehaviorState.PostInteractionPause ||
+            _currentState == NpcBehaviorState.RequestingDecision ||
+            _currentState == NpcBehaviorState.WaitingNearTarget
+           )) {
              Debug.LogWarning($"[{_characterData.characterName}] Initial dialogue with '{otherCharacter.characterName}' skipped: NPC busy (State: {_currentState}).");
             return;
         }
-        
-        // Safety check before proceeding with async operations
+
         if (this == null || gameObject == null || !enabled) {
             string npcNameForLog = _characterData != null ? _characterData.characterName : "NpcController (unknown)";
             Debug.LogWarning($"[{npcNameForLog}] NpcController or its GameObject was destroyed/disabled before starting StartDialogueAsync. Aborting.");
-            _isApiCallInProgress = false; // Ensure reset
+            _isApiCallInProgress = false;
             return;
         }
 
-        ChangeState(NpcBehaviorState.RequestingDecision); // NPC is now busy requesting dialogue
+        _originalTargetLandmarkForWaiting = null; 
+
+        ChangeState(NpcBehaviorState.RequestingDecision);
         _isApiCallInProgress = true;
         if (_npcMovement != null && _npcMovement.IsMoving()) _npcMovement.StopMovement();
         _hasMovementTarget = false;
@@ -580,7 +799,7 @@ public class NpcController : MonoBehaviour
         }
 
         string selfEmotionStringForPrompt = $"{_currentNpcEmotionalState.primary_emotion} (intensity: {_currentNpcEmotionalState.intensity:F1})";
-        Debug.Log($"<color=orange>[{_characterData.characterName}] Initiating DIALOGUE with '{otherCharacter.characterName}'. FollowUp: {isFollowUpDialogue}. LLM Seed: '{npcInitialPromptForLLM}'. Emotion: {selfEmotionStringForPrompt}</color>");
+        // Debug.Log($"<color=orange>[{_characterData.characterName}] Initiating DIALOGUE with '{otherCharacter.characterName}'. FollowUp: {isFollowUpDialogue}. LLM Seed: '{npcInitialPromptForLLM}'. Emotion: {selfEmotionStringForPrompt}</color>");
 
         var interactionRequest = new GameInteractionRequest {
             interacting_objects = new List<InteractingObjectInfo> {
@@ -596,25 +815,20 @@ public class NpcController : MonoBehaviour
 
         GameInteractionResponse response = await ApiService.PostAsync<GameInteractionRequest, GameInteractionResponse>("/dialogue/game-interaction", interactionRequest);
 
-        // *** ADDED CHECK for MissingReferenceException ***
         if (this == null || gameObject == null || !enabled)
         {
             string npcNameForLogAfterAwait = _characterData != null ? _characterData.characterName : "NpcController (unknown)";
             string otherCharNameForLog = otherCharacter != null ? otherCharacter.characterName : "other character (unknown)";
-            Debug.LogWarning($"[{npcNameForLogAfterAwait}] NpcController or its GameObject was destroyed or disabled during API call for dialogue with '{otherCharNameForLog}'. Aborting further processing in StartDialogueAsync.");
-            _isApiCallInProgress = false; // Attempt to reset state
-            // Potentially try to revert to Idle if the current state is RequestingDecision and no response processed
+            Debug.LogWarning($"[{npcNameForLogAfterAwait}] NpcController or its GameObject was destroyed or disabled during API call for dialogue with '{otherCharNameForLog}'. Aborting processing.");
+            _isApiCallInProgress = false;
             if(_currentState == NpcBehaviorState.RequestingDecision) ChangeState(NpcBehaviorState.Idle);
-            return; 
+            return;
         }
-        // *** END ADDED CHECK ***
 
         _isApiCallInProgress = false;
-        // If we are here, 'this' is valid. Now determine the next state based on response.
-        // ChangeState(NpcBehaviorState.Interacting); // This was a bit premature, move after response check
 
         if (response != null && response.dialogue_history != null && response.dialogue_history.Count > 0) {
-            ChangeState(NpcBehaviorState.Interacting); // Now change to Interacting if response is valid
+            ChangeState(NpcBehaviorState.Interacting);
             foreach (var turn in response.dialogue_history) {
                 string messageToDisplay = !string.IsNullOrEmpty(turn.message_translated_zh_tw) ? turn.message_translated_zh_tw : turn.message_original_language;
 
@@ -639,10 +853,8 @@ public class NpcController : MonoBehaviour
         } else {
             Debug.LogError($"[{_characterData.characterName}] Dialogue with '{otherCharacter.characterName}' failed or no history.");
             ShowDialogueBubble_TMP("[Dialogue Error]", 2f);
-            // If dialogue failed, don't stay in RequestingDecision; go to PostInteractionPause then Idle
         }
-
-        ChangeState(NpcBehaviorState.PostInteractionPause); // Always go to post-interaction pause after attempt
+        ChangeState(NpcBehaviorState.PostInteractionPause);
     }
 
     public void ShowDialogueBubble_TMP(string message, float duration)
@@ -651,7 +863,6 @@ public class NpcController : MonoBehaviour
             if (dialogueUIManager != null && dialogueUIManager.gameObject.activeInHierarchy) {
                 dialogueUIManager.ShowDialogue(_characterData.characterName, message, duration);
             } else {
-                // Check if _characterData is null before accessing its members
                 string charName = _characterData != null ? _characterData.characterName : "Unknown NPC";
                 Debug.LogError($"[{charName}] Dialogue Bubble Prefab (TMP) not assigned and no fallback UI! Msg: {message}", this);
             }
@@ -697,51 +908,47 @@ public class NpcController : MonoBehaviour
         if (_currentState == NpcBehaviorState.Interacting ||
             _currentState == NpcBehaviorState.ApproachingInteraction ||
             _currentState == NpcBehaviorState.PostInteractionPause ||
+            _currentState == NpcBehaviorState.WaitingNearTarget ||
             _currentState == NpcBehaviorState.RequestingDecision) return;
 
         if (interactionTrigger == null || !interactionTrigger.IsTouching(otherCollider) || otherCollider.gameObject == gameObject) return;
 
         if (otherCollider.TryGetComponent<CharacterData>(out CharacterData encounteredCharacter))
         {
-            if (encounteredCharacter == _characterData) return; // Don't interact with self
-            
-            // Prevent initiating new interaction if already targeting someone or just finished
+            if (encounteredCharacter == _characterData) return;
             if (_currentTargetInteractionCharacter != null && _currentTargetInteractionCharacter == encounteredCharacter) return;
 
-
-            Debug.Log($"<color=yellow>[{_characterData.characterName}] Encountered '{encounteredCharacter.characterName}'. Preparing to interact.</color>");
+            // Debug.Log($"<color=yellow>[{_characterData.characterName}] Encountered '{encounteredCharacter.characterName}'. Preparing to interact.</color>");
             _currentTargetInteractionCharacter = encounteredCharacter;
-            if (_npcMovement != null && _npcMovement.IsMoving()) _npcMovement.StopMovement(); // Stop current LLM movement
-            _hasMovementTarget = false; // Cancel any LLM movement goal
+            if (_npcMovement != null && _npcMovement.IsMoving()) _npcMovement.StopMovement();
+            _hasMovementTarget = false;
+            _originalTargetLandmarkForWaiting = null;
             ChangeState(NpcBehaviorState.ApproachingInteraction);
         }
     }
 
     void OnTriggerExit2D(Collider2D otherCollider) {
         if (_currentTargetInteractionCharacter != null && otherCollider.gameObject == _currentTargetInteractionCharacter.gameObject) {
-            // If the character we were trying to approach for interaction leaves our trigger zone
             if (_currentState == NpcBehaviorState.ApproachingInteraction) {
-                Debug.Log($"<color=grey>[{_characterData.characterName}] Interaction target '{_currentTargetInteractionCharacter.characterName}' left trigger while approaching. Returning to Idle.</color>");
+                // Debug.Log($"<color=grey>[{_characterData.characterName}] Interaction target '{_currentTargetInteractionCharacter.characterName}' left trigger while approaching. Returning to Idle.</color>");
                 _currentTargetInteractionCharacter = null;
-                if (_npcMovement != null && _npcMovement.IsMoving()) _npcMovement.StopMovement(); // Stop the approach
+                if (_npcMovement != null && _npcMovement.IsMoving()) _npcMovement.StopMovement();
+                _originalTargetLandmarkForWaiting = null;
                 ChangeState(NpcBehaviorState.Idle);
             }
-            // If we were already interacting and they leave, the dialogue might end or continue depending on design.
-            // For now, we don't explicitly handle ending an active dialogue if target leaves trigger here,
-            // as dialogue is short and turn-based via API. The PostInteractionPause will lead to Idle.
         }
     }
 
     private void UpdateLandmarkStatusOnArrivalOrDeparture(Vector3 npcCurrentPosition, bool isArrivalEvent)
     {
-        LandmarkDataComponent eventLandmark = FindTargetLandmark(npcCurrentPosition); // Landmark at current/arrival position
+        LandmarkDataComponent eventLandmark = FindTargetLandmark(npcCurrentPosition);
 
-        if (isArrivalEvent) // NPC Arrived at a new location (_currentMovementTargetWorld)
+        if (isArrivalEvent)
         {
             if (eventLandmark != null && eventLandmark != _currentActiveLandmarkZone)
             {
-                NotifyDepartureFromLandmark(_currentActiveLandmarkZone); // Depart from old zone if it was different
-                _currentActiveLandmarkZone = eventLandmark;               // Set new current zone
+                NotifyDepartureFromLandmark(_currentActiveLandmarkZone);
+                _currentActiveLandmarkZone = eventLandmark;
 
                 if (eventLandmark.landmarkTypeTag == "bedroom" && eventLandmark.ownerNpcId == _characterData.npcId)
                 {
@@ -749,63 +956,58 @@ public class NpcController : MonoBehaviour
                 }
                 else if (eventLandmark.landmarkTypeTag == "bathroom")
                 {
-                    if (!eventLandmark.HasDynamicStatus(GetOccupancyStatusOccupiedBySelf()) && 
-                        !eventLandmark.HasDynamicStatusWithPrefix(OccupancyStatusPrefix)) 
+                    if (!eventLandmark.HasDynamicStatusWithPrefix(OccupancyStatusPrefix) ||
+                        eventLandmark.HasDynamicStatus(GetOccupancyStatusOccupiedBySelf()))
                     {
                          eventLandmark.UpdateDynamicStatusByPrefix(OccupancyStatusPrefix, GetOccupancyStatusOccupiedBySelf());
+                    } else if (eventLandmark.HasDynamicStatusWithPrefix(OccupancyStatusPrefix) && !eventLandmark.HasDynamicStatus(GetOccupancyStatusOccupiedBySelf()) ){
+                        Debug.LogWarning($"[{_characterData.characterName}] Arrived at bathroom '{eventLandmark.landmarkName}' but it's already occupied by someone else. Status was not pre-checked or wait logic failed?");
                     }
                 }
-                Debug.Log($"[{_characterData.characterName}] Entered zone: '{eventLandmark.landmarkName}' ({eventLandmark.landmarkTypeTag}).");
+                // Debug.Log($"[{_characterData.characterName}] Entered zone: '{eventLandmark.landmarkName}' ({eventLandmark.landmarkTypeTag}).");
             }
-            else if (eventLandmark == null && _currentActiveLandmarkZone != null) // Arrived at a point not in a zone, but was in a zone
+            else if (eventLandmark == null && _currentActiveLandmarkZone != null)
             {
                  NotifyDepartureFromLandmark(_currentActiveLandmarkZone);
                  _currentActiveLandmarkZone = null;
             }
-            // If eventLandmark is null and _currentActiveLandmarkZone is also null, nothing to do.
-            // If eventLandmark is the same as _currentActiveLandmarkZone, already in this zone, nothing to do for arrival.
         }
-        else // Is Departure Event (called before new movement decision, from current npcCurrentPosition)
+        else // Is Departure Event
         {
-            // Logic: if NPC is currently inside _currentActiveLandmarkZone, but is about to decide to move
-            // (which means it's "departing" its current spot), update status.
-            // Or, if the NPC is no longer physically within the bounds of _currentActiveLandmarkZone.
             if (_currentActiveLandmarkZone != null)
             {
-                bool hasLeftCurrentZone = true; // Assume left unless proven otherwise
-                if (eventLandmark == _currentActiveLandmarkZone) // Still in the same landmark zone based on current position
+                bool hasLeftCurrentZone = true;
+                if (eventLandmark == _currentActiveLandmarkZone)
                 {
                     hasLeftCurrentZone = false;
                 }
-                else if (eventLandmark != null && eventLandmark != _currentActiveLandmarkZone) // Clearly in a new zone
+                else if (eventLandmark != null && eventLandmark != _currentActiveLandmarkZone)
                 {
                     hasLeftCurrentZone = true;
                 }
-                else if (eventLandmark == null) // Currently not in any specific landmark zone
+                else if (eventLandmark == null)
                 {
                      hasLeftCurrentZone = true;
                 }
 
-
                 if (hasLeftCurrentZone)
                 {
                     NotifyDepartureFromLandmark(_currentActiveLandmarkZone);
-                    _currentActiveLandmarkZone = eventLandmark; // Update to new zone (which might be null if in hallway)
+                    _currentActiveLandmarkZone = eventLandmark;
                 }
             }
-            else if (eventLandmark != null) // Was not in a zone, but current position IS in a zone (e.g. game start)
+            else if (eventLandmark != null)
             {
                 // This case is more like an "initial entry" rather than departure, handled by arrival logic.
-                // For departure logic, if _currentActiveLandmarkZone is null, nothing to depart from.
             }
         }
     }
 
     public void NotifyDepartureFromLandmark(LandmarkDataComponent departedLandmark)
     {
-        if (departedLandmark == null || _characterData == null) return; // Safety check
+        if (departedLandmark == null || _characterData == null) return;
 
-        Debug.Log($"[{_characterData.characterName}] Notifying departure from: '{departedLandmark.landmarkName}' ({departedLandmark.landmarkTypeTag}).");
+        // Debug.Log($"[{_characterData.characterName}] Notifying departure from: '{departedLandmark.landmarkName}' ({departedLandmark.landmarkTypeTag}).");
         if (departedLandmark.landmarkTypeTag == "bedroom" && departedLandmark.ownerNpcId == _characterData.npcId)
         {
             departedLandmark.UpdateDynamicStatusByPrefix(OwnerPresenceStatusPrefix, OwnerPresenceAbsent);
@@ -814,10 +1016,9 @@ public class NpcController : MonoBehaviour
         {
             if(departedLandmark.HasDynamicStatus(GetOccupancyStatusOccupiedBySelf()))
             {
-                departedLandmark.UpdateDynamicStatusByPrefix(OccupancyStatusPrefix, null); // Effectively makes it vacant from this NPC
+                departedLandmark.UpdateDynamicStatusByPrefix(OccupancyStatusPrefix, null);
             }
         }
-        // Potentially other landmark types could have departure logic here
     }
 
     private LandmarkDataComponent FindTargetLandmark(Vector3 targetPosition)
@@ -827,55 +1028,34 @@ public class NpcController : MonoBehaviour
             Debug.LogWarning("SceneContextManager not available in NpcController.FindTargetLandmark");
             return null;
         }
-        
+
         List<LandmarkDataComponent> allLandmarks = sceneContextManager.GetAllIndividualLandmarkDataComponents();
         List<RoomDataComponent> allRooms = sceneContextManager.GetAllRoomDataComponents();
 
-
         LandmarkDataComponent foundLandmark = null;
-        // For specific items, a small radius might be okay.
-        // For rooms, we need to check if the targetPosition is *inside* the room's bounds.
-        float minDistanceSqToItemCenter = 0.5f * 0.5f; // Increased slightly from 0.25 for small items
 
-        // Priority 1: Check if targetPosition is inside any Room's bounds (RoomDataComponent)
         if (allRooms != null)
         {
             foreach (var room in allRooms)
             {
                 if (room.roomBoundsCollider != null && room.roomBoundsCollider.OverlapPoint(new Vector2(targetPosition.x, targetPosition.y)))
                 {
-                    // If the room GameObject itself has a LandmarkDataComponent, prioritize that.
                     LandmarkDataComponent roomAsLandmark = room.GetComponent<LandmarkDataComponent>();
                     if (roomAsLandmark != null) return roomAsLandmark;
-                    
-                    // If not, but we need a LandmarkDataComponent (e.g. for specific status notes not on RoomDataComponent),
-                    // we might need to search for a 'representative' landmark within that room near the target point,
-                    // or decide that the RoomDataComponent itself (if it had more general landmark-like properties) is enough.
-                    // For now, if a room has a LandmarkDataComponent, we use it. Otherwise, we fall through to item check.
-                    // This implies rooms that are *just* RoomDataComponent without an associated LandmarkDataComponent
-                    // on the same GameObject won't be returned directly by this function for "zone" purposes,
-                    // unless they contain individual items that are LandmarkDataComponents.
                 }
             }
         }
 
-        // Priority 2: Check for specific items (LandmarkDataComponent) near the target position
-        // This is useful if the target is an item within a room, or an item in an open area.
+        float minDistanceSqToItemCenter = arrivalThreshold * arrivalThreshold * 1.5f;
         float closestDistSq = float.MaxValue;
         if (allLandmarks != null)
         {
             foreach (var landmark in allLandmarks)
             {
                 if (landmark == null) continue;
-                // Check distance to landmark's transform position
                 float distSq = (landmark.transform.position - targetPosition).sqrMagnitude;
-                
-                // A landmark is considered "at" the target position if:
-                // 1. It's a very small item and the target is very close to its center.
-                // 2. OR, if the landmark has its own collider (e.g., a zone trigger for a bed or chair)
-                //    and the target point is inside that collider. (More complex, not implemented here directly, relies on Room for larger zones)
 
-                if (distSq < minDistanceSqToItemCenter) // For very small, point-like landmarks
+                if (distSq < minDistanceSqToItemCenter)
                 {
                     if (distSq < closestDistSq)
                     {
@@ -883,22 +1063,80 @@ public class NpcController : MonoBehaviour
                         foundLandmark = landmark;
                     }
                 }
-                // If the landmark has a collider that defines its "area" and it's not a room collider already checked:
-                // Collider2D landmarkCollider = landmark.GetComponent<Collider2D>();
-                // if (landmarkCollider != null && landmark.GetComponent<RoomDataComponent>() == null && landmarkCollider.OverlapPoint(new Vector2(targetPosition.x, targetPosition.y)))
-                // {
-                //    return landmark; // Found a non-room landmark whose area contains the target
-                // }
             }
         }
+        return foundLandmark;
+    }
+
+    // *** 此處定義了 ParseOriginalTargetFromWaitingAction ***
+    private string ParseOriginalTargetFromWaitingAction(string actionSummary)
+    {
+        if (string.IsNullOrEmpty(actionSummary)) return null;
         
-        // If a specific item was found very close, return it.
-        // Otherwise, if no room with a LandmarkDataComponent was found, and no item was super close,
-        // it means the target is likely in an open area of a room, or a hallway.
-        // In such cases, we might return null, indicating no specific "landmark zone" for that point,
-        // or the RoomDataComponent itself if we adapted this function to return it.
-        // Current logic prioritizes LandmarkDataComponent.
-        return foundLandmark; 
+        // Pattern to match "wait near Landmark_Name" or "wait near Landmark Name" (possibly with parentheses after)
+        // It tries to capture a sequence of words after "wait near " that doesn't start with '('
+        string pattern = @"wait near\s+([A-Za-z0-9_'-]+(?:\s+[A-Za-z0-9_'-]+)*)"; 
+        Match match = Regex.Match(actionSummary, pattern, RegexOptions.IgnoreCase);
+        if (match.Success && match.Groups.Count > 1)
+        {
+            string potentialTarget = match.Groups[1].Value.Trim();
+            // Debug.Log($"Parsed original target from '{actionSummary}': '{potentialTarget}'");
+            return potentialTarget;
+        }
+
+        // Fallback for slightly different phrasing, e.g., "wait by the X"
+        pattern = @"wait by the\s+([A-Za-z0-9_'-]+(?:\s+[A-Za-z0-9_'-]+)*)";
+        match = Regex.Match(actionSummary, pattern, RegexOptions.IgnoreCase);
+        if (match.Success && match.Groups.Count > 1)
+        {
+            string potentialTarget = match.Groups[1].Value.Trim();
+            // Attempt to clean common additions like "Door" if it's a general instruction
+            if (potentialTarget.EndsWith("Door", StringComparison.OrdinalIgnoreCase)) {
+                potentialTarget = potentialTarget.Substring(0, potentialTarget.Length - "Door".Length).Trim();
+            }
+            // Debug.Log($"Parsed original target (fallback) from '{actionSummary}': '{potentialTarget}'");
+            return potentialTarget;
+        }
+        // Debug.LogWarning($"Could not parse original target from action: '{actionSummary}'");
+        return null;
+    }
+    
+    // *** 此處定義了 ParseTargetNpcNameFromSocialAction ***
+    private string ParseTargetNpcNameFromSocialAction(string actionSummary)
+    {
+        if (string.IsNullOrEmpty(actionSummary)) return null;
+        // Examples: "Approach Lin Yao-Yu for a chat", "Go chat with Tsai Szu-Yen", "Say hi to M01"
+        // Pattern to match common phrases indicating social interaction with a named target
+        string pattern = @"(?:chat with|talk to|approach|greet|say hi to)\s+([A-Za-z0-9_'-]+(?:\s+[A-Za-z0-9_'-]+)*)";
+        Match match = Regex.Match(actionSummary, pattern, RegexOptions.IgnoreCase);
+        if (match.Success && match.Groups.Count > 1)
+        {
+            return match.Groups[1].Value.Trim();
+        }
+        return null;
+    }
+
+    // *** 此處定義了 FindCharacterByName ***
+    private CharacterData FindCharacterByName(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return null;
+
+        // Ideal way: if SceneContextManager caches and provides a list of all CharacterData
+        // List<CharacterData> allCharacters = sceneContextManager?.GetAllCharacterDataInstances(); 
+        // if (allCharacters != null) { ... }
+
+        // Fallback: FindObjectsOfType - use with caution if called very frequently or in large scenes
+        CharacterData[] allCharactersInScene = FindObjectsOfType<CharacterData>();
+        foreach (CharacterData character in allCharactersInScene)
+        {
+            if (character.characterName.Equals(name, StringComparison.OrdinalIgnoreCase) ||
+                (!string.IsNullOrEmpty(character.npcId) && character.npcId.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            {
+                return character;
+            }
+        }
+        // Debug.LogWarning($"FindCharacterByName: Character '{name}' not found.");
+        return null;
     }
 
     void OnDestroy()
@@ -907,15 +1145,12 @@ public class NpcController : MonoBehaviour
         {
             Destroy(_currentDialogueBubbleInstance);
         }
-        // Ensure NPC "departs" its current zone if the object is destroyed
         if (_currentActiveLandmarkZone != null)
         {
             NotifyDepartureFromLandmark(_currentActiveLandmarkZone);
             _currentActiveLandmarkZone = null;
         }
-        // Stop any running coroutines manually if needed, though Unity usually handles this on destroy
         if(_hideBubbleCoroutine != null) StopCoroutine(_hideBubbleCoroutine);
-        // If in PostInteractionPause, stop that too
-        StopCoroutine(nameof(PostInteractionPauseCoroutine)); // Stop by name to be safe
+        StopAllCoroutines();
     }
 }
