@@ -57,8 +57,8 @@ class MovementService:
                 cleaned_text = cleaned_text[:-len(suffix)].rstrip()
         
         lines = cleaned_text.splitlines()
-        processed_lines = []
-        in_yaml_content = False
+        # processed_lines = [] # This variable was unused
+        # in_yaml_content = False # This variable was unused
         
         temp_lines = list(lines)
         while temp_lines and temp_lines[0].strip() == "---":
@@ -319,7 +319,7 @@ class MovementService:
             explicit_player_movement_request=request_data.explicit_player_movement_request
         )
 
-        llm_response_raw: str = "" # Renamed from llm_raw_response_text for clarity with the parameter in _log_movement_decision_details
+        llm_response_raw: str = "" 
         parsed_llm_output: Dict[str, Any]
         llm_chosen_target_pos: Optional[Position] = None
         final_target_position: Position
@@ -463,7 +463,8 @@ class MovementService:
             cleaned_new_emotion_tag = re.sub(r"[\[\]\"']", "", new_emotion_tag).strip()
             if "no change" in cleaned_new_emotion_tag.lower() or "neutral emotion" in cleaned_new_emotion_tag.lower() : 
                  potential_emotions = ["happy", "sad", "angry", "curious", "content", "annoyed", "fearful"] 
-                 found_emotion = "no_change"
+                 found_emotion = "no_change" # Default to no_change if only commentary is found
+                 # Try to find a primary emotion word if it's mixed with commentary
                  for pe in potential_emotions:
                      if pe in cleaned_new_emotion_tag.lower():
                          found_emotion = pe
@@ -482,14 +483,14 @@ class MovementService:
                 )
                 updated_emotional_state_snapshot = (await memory_service.get_memory_data()).current_emotional_state
             elif new_emotion_tag_lower != "no_change" and new_emotion_tag_lower != current_primary_emotion_lower : 
-                logger.info(f"NPC {npc_id_obj.npc_id} emotion tag from LLM '{new_emotion_tag}' resulted in no change or back to neutral.")
+                logger.info(f"NPC {npc_id_obj.npc_id} emotion tag from LLM '{new_emotion_tag}' resulted in no change or back to neutral (current was {current_primary_emotion_lower}).")
+            # else: no meaningful change, do nothing
         else:
              logger.warning(f"NPC {npc_id_obj.npc_id} resulting_emotion_tag was not a string: {new_emotion_tag}")
 
 
         await memory_service.save_memory_to_file()
 
-        # *** Pass llm_response_raw (which holds the text) to the logging function ***
         self._log_movement_decision_details(request_data, system_prompt_for_llm, llm_response_raw, final_target_position, decision_context_summary, parsed_llm_output)
 
         api_processing_time_ms = (time.perf_counter() - request_start_time) * 1000
@@ -503,7 +504,7 @@ class MovementService:
         return NPCMovementResponse(
             npc_id=npc_id_obj.npc_id,
             name=npc_id_obj.name,
-            llm_full_reasoning_text=parsed_llm_output.get('reasoning', llm_response_raw if llm_response_raw else "No reasoning available."), # Use llm_response_raw here
+            llm_full_reasoning_text=parsed_llm_output.get('reasoning', llm_response_raw if llm_response_raw else "No reasoning available."), 
             chosen_action_summary=final_chosen_action_summary,
             target_destination=final_target_position,
             primary_decision_drivers=final_priority_drivers,
@@ -512,7 +513,7 @@ class MovementService:
         )
 
     def _log_movement_decision_details(
-        self, request: NPCMovementRequest, prompt: str, llm_response_raw_text_param: str, # Changed parameter name
+        self, request: NPCMovementRequest, prompt: str, llm_response_raw_param: str, 
         final_target: Position, reason_summary: str, parsed_llm_output: Dict[str,Any]
     ):
         log_entry = {
@@ -524,8 +525,7 @@ class MovementService:
                 "dialogue_summary_input": request.recent_dialogue_summary_for_movement,
                 "player_request_input": request.explicit_player_movement_request.model_dump(mode='json') if request.explicit_player_movement_request else None
             },
-            # *** Corrected variable name here ***
-            "llm_raw_response_snippet": llm_response_raw_text_param[:500] + "..." if len(llm_response_raw_text_param) > 500 else llm_response_raw_text_param,
+            "llm_raw_response_snippet": llm_response_raw_param[:500] + "..." if len(llm_response_raw_param) > 500 else llm_response_raw_param,
             "llm_parsed_output": parsed_llm_output,
             "decision_reason_summary": reason_summary,
             "final_target_chosen": final_target.model_dump() if final_target else None,

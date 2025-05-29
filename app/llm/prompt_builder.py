@@ -73,10 +73,11 @@ def build_translation_prompt_messages(
         Message(role=MessageRole.USER, content=text_to_translate)
     ]
 
-MAX_NEARBY_ENTITIES_TO_LIST = 5 
-MAX_LANDMARKS_TO_LIST = 5
-MAX_LOCATION_HISTORY_TO_LIST = 3
-MAX_LTM_TO_LIST_IN_PROMPT = 3
+# *** 極端精簡列表項目數量以縮短提示詞 ***
+MAX_NEARBY_ENTITIES_TO_LIST = 1 # 原為 2
+MAX_LANDMARKS_TO_LIST = 2       # 原為 3
+MAX_LOCATION_HISTORY_TO_LIST = 1 # 保持 1
+MAX_LTM_TO_LIST_IN_PROMPT = 0    # 暫時不提供長期記憶
 
 def _format_current_time_for_prompt(game_time: GameTime) -> str:
     day_info = f" on {game_time.day_of_week}" if game_time.day_of_week else ""
@@ -105,7 +106,8 @@ def _format_schedule_rules_for_prompt(schedule_rules: Optional[List[NPCScheduleR
         return "No specific schedule obligations currently."
 
     lines = ["\n--- Current Schedule ---"]
-    for rule in schedule_rules[:2]:
+    # *** 最多只顯示1條日程規則 ***
+    for rule in schedule_rules[:1]: 
         loc_info_parts = []
         if rule.target_location_name_or_area:
             loc_info_parts.append(f"'{rule.target_location_name_or_area}'")
@@ -114,8 +116,8 @@ def _format_schedule_rules_for_prompt(schedule_rules: Optional[List[NPCScheduleR
 
         loc_info_str = " at/near " + " / ".join(loc_info_parts) if loc_info_parts else ""
         mandatory_str = "MANDATORY:" if rule.is_mandatory else "Preferred:"
-        lines.append(f"- {mandatory_str} '{rule.time_period_tag}': '{rule.activity_description}'{loc_info_str}.")
-    if len(schedule_rules) > 2:
+        lines.append(f"- {mandatory_str} '{rule.time_period_tag}': '{rule.activity_description[:50]}{'...' if len(rule.activity_description) > 50 else ''}'{loc_info_str}.") # 縮短活動描述
+    if len(schedule_rules) > 1: 
         lines.append("- (...and more rules.)")
     return "\n".join(lines)
 
@@ -124,13 +126,10 @@ def _format_nearby_entities_for_prompt(entities: List[EntityContextInfo], npc_cu
         return "No other characters nearby."
 
     lines = ["\n--- Nearby Characters (Closest First) ---"]
-    # Corrected: Use 'entity' instead of 'e' in the lambda for distance calculation
-    # EntityContextInfo inherits x and y from Position, so direct access is fine
     sorted_entities = sorted(entities, key=lambda entity_item: npc_current_pos.distance_to(Position(x=entity_item.x, y=entity_item.y)))
     
     for i, entity in enumerate(sorted_entities[:MAX_NEARBY_ENTITIES_TO_LIST]):
         significance = " (important to you)" if entity.is_significant_to_npc else ""
-        # Corrected: Use 'entity' here as well
         dist = npc_current_pos.distance_to(Position(x=entity.x, y=entity.y))
         lines.append(f"- '{entity.name or entity.npc_id}' ({entity.entity_type}{significance}) at ({entity.x:.0f},{entity.y:.0f}), dist {dist:.0f}.")
 
@@ -147,46 +146,28 @@ def _format_landmarks_for_prompt(landmarks: List[LandmarkContextInfo], npc_curre
 
     for i, landmark in enumerate(sorted_landmarks[:MAX_LANDMARKS_TO_LIST]):
         type_info = f" ({landmark.landmark_type_tag})" if landmark.landmark_type_tag else ""
-        owner_info_parts = []
+        # *** 簡化 owner_info 和 entrance_info ***
+        owner_info_str = ""
         if landmark.owner_id:
-            if landmark.owner_id == npc_info.npc_id:
-                owner_info_parts.append("your private area")
-            else:
-                owner_info_parts.append(f"private area of {landmark.owner_id}")
-
-        if landmark.entrance_positions and len(landmark.entrance_positions) > 0:
-            owner_info_parts.append(f"{len(landmark.entrance_positions)} entrance(s)")
-
-        owner_info = f" ({', '.join(owner_info_parts)})" if owner_info_parts else ""
-
+            owner_info_str = f" (Owner: {landmark.owner_id})" if landmark.owner_id != npc_info.npc_id else " (Your Room)"
+        
         dist = npc_current_pos.distance_to(landmark.position)
-        lines.append(f"- '{landmark.landmark_name}'{type_info}{owner_info} at ({landmark.position.x:.0f},{landmark.position.y:.0f}), dist {dist:.0f}.")
+        lines.append(f"- '{landmark.landmark_name}'{type_info}{owner_info_str} at ({landmark.position.x:.0f},{landmark.position.y:.0f}), dist {dist:.0f}.")
+        
+        # *** 暫時不輸出 current_status_notes 以大幅縮短提示詞 ***
+        # critical_status_notes = []
+        # if landmark.current_status_notes:
+        #     # ... (original status note logic) ...
+        # if critical_status_notes:
+        #          lines.append(f"  Notes: {'; '.join(critical_status_notes)}")
 
-        critical_status_notes = []
-        if landmark.current_status_notes:
-            npc_id_str = npc_info.npc_id if npc_info else ""
-            for note in landmark.current_status_notes:
-                note_lower = note.lower()
-                is_occupied_by_self = f"occupancy_occupied_by_{npc_id_str.lower()}" == note_lower if npc_id_str else False
-                is_occupied_by_other = "occupancy_occupied" in note_lower and not is_occupied_by_self
-                
-                if is_occupied_by_other and "occupancy_occupied_by_" in note_lower : 
-                    critical_status_notes.append(f"STATUS: OCCUPIED BY OTHER")
-                elif is_occupied_by_self:
-                     critical_status_notes.append(f"STATUS: You are using it")
-                elif "owner_presence_absent" in note_lower and landmark.owner_id and (not npc_id_str or landmark.owner_id.lower() != npc_id_str.lower()):
-                    critical_status_notes.append(f"STATUS: OWNER ABSENT (Private to {landmark.owner_id})")
-                elif "owner_presence_present" in note_lower and landmark.owner_id and (not npc_id_str or landmark.owner_id.lower() != npc_id_str.lower()):
-                     critical_status_notes.append(f"STATUS: OWNER PRESENT (Private to {landmark.owner_id})")
-            if critical_status_notes:
-                 lines.append(f"  Notes: {'; '.join(critical_status_notes)}")
     if len(sorted_landmarks) > MAX_LANDMARKS_TO_LIST:
         lines.append(f"- (...and {len(sorted_landmarks) - MAX_LANDMARKS_TO_LIST} other landmarks further away.)")
     return "\n".join(lines)
 
 def _format_location_history_for_prompt(history: List[VisitedLocationEntry], current_game_time_obj: GameTime) -> str:
-    if not history:
-        return "No recent location visits noted."
+    if not history or MAX_LOCATION_HISTORY_TO_LIST == 0: # Check if we should skip based on new constant
+        return "Recent location history not considered for this decision." if MAX_LOCATION_HISTORY_TO_LIST == 0 else "No recent location visits noted."
 
     current_game_datetime = current_game_time_obj.current_timestamp
     if not isinstance(current_game_datetime, datetime):
@@ -200,9 +181,8 @@ def _format_location_history_for_prompt(history: List[VisitedLocationEntry], cur
             logger.error(f"Error parsing current_game_time.current_timestamp '{current_game_time_obj.current_timestamp}': {e}")
             return "Recent location history unavailable due to time parsing issue."
 
-
     lines = ["\n--- Recent Location Visits (Newest First) ---"]
-    for entry in sorted(history, key=lambda e_item: e_item.timestamp_visited, reverse=True)[:MAX_LOCATION_HISTORY_TO_LIST]: # Changed loop var to e_item
+    for entry in sorted(history, key=lambda e_item: e_item.timestamp_visited, reverse=True)[:MAX_LOCATION_HISTORY_TO_LIST]:
         entry_datetime = entry.timestamp_visited
         if not isinstance(entry_datetime, datetime):
             try: 
@@ -221,7 +201,6 @@ def _format_location_history_for_prompt(history: List[VisitedLocationEntry], cur
         elif entry_datetime.tzinfo is not None and current_game_datetime.tzinfo is None:
              logger.warning("Comparing aware location timestamp with naive current game time.")
 
-
         time_diff_seconds = (current_game_datetime - entry_datetime).total_seconds()
         time_diff_seconds = max(0, time_diff_seconds)
 
@@ -234,12 +213,12 @@ def _format_location_history_for_prompt(history: List[VisitedLocationEntry], cur
     return "\n".join(lines)
 
 def _format_long_term_memories_for_prompt(memories: Optional[List[LongTermMemoryEntry]]) -> str:
-    if not memories:
-        return "No specific long-term memories seem immediately relevant."
+    if not memories or MAX_LTM_TO_LIST_IN_PROMPT == 0: # Check if we should skip
+        return "Long-term memories not considered for this decision." if MAX_LTM_TO_LIST_IN_PROMPT == 0 else "No specific long-term memories seem immediately relevant."
+        
     lines = ["\n--- Relevant Long-Term Memories ---"]
-
     for i, mem in enumerate(memories[:MAX_LTM_TO_LIST_IN_PROMPT]):
-        lines.append(f"Memory ({mem.memory_type_tag}): \"{mem.content_text[:80]}{'...' if len(mem.content_text) > 80 else ''}\"")
+        lines.append(f"Memory ({mem.memory_type_tag}): \"{mem.content_text[:50]}{'...' if len(mem.content_text) > 50 else ''}\"") # *** 再縮短 ***
 
     if len(memories) > MAX_LTM_TO_LIST_IN_PROMPT:
         lines.append(f"  (...and {len(memories) - MAX_LTM_TO_LIST_IN_PROMPT} more.)")
@@ -262,7 +241,7 @@ def build_npc_movement_decision_prompt(
 ) -> str:
     prompt_components = [
         f"You are '{npc_info.name or npc_info.npc_id}' (ID: {npc_info.npc_id}) in a shared apartment.",
-        f"Personality: \"{personality_description[:200]}{'...' if len(personality_description) > 200 else ''}\"",
+        f"Personality: \"{personality_description[:100]}{'...' if len(personality_description) > 100 else ''}\"", # *** 大幅縮短 ***
         _format_current_time_for_prompt(game_time),
         _format_emotional_state_for_prompt(emotional_state),
         _format_schedule_rules_for_prompt(active_schedule_rules),
@@ -279,7 +258,7 @@ def build_npc_movement_decision_prompt(
     prompt_components.append(_format_long_term_memories_for_prompt(relevant_long_term_memories))
 
     if recent_dialogue_summary: 
-        prompt_components.append(f"\nContext/Dialogue/Prior Failures/Intent: \"{recent_dialogue_summary[:250]}{'...' if len(recent_dialogue_summary) > 250 else ''}\"")
+        prompt_components.append(f"\nContext/Dialogue/Prior Failures/Intent: \"{recent_dialogue_summary[:100]}{'...' if len(recent_dialogue_summary) > 100 else ''}\"") # *** 大幅縮短 ***
 
     if explicit_player_movement_request:
         prompt_components.append(f"Player Request: Go near ({explicit_player_movement_request.x:.0f},{explicit_player_movement_request.y:.0f}). Consider if reasonable & respects rules.")
@@ -287,32 +266,32 @@ def build_npc_movement_decision_prompt(
     prompt_components.append(f"""
 \n--- Social Considerations & Opportunities ---
 - You are a resident in a shared apartment. Being social is natural.
-- If you are in a common area (e.g., 'Living Room', 'Kitchen', 'Dining_room') and you see a character you know (especially a friend) nearby who doesn't seem busy, consider initiating a short conversation as a valid action.
-- If your current emotion is positive (e.g., 'happy', 'curious', 'content') or neutral and you are not in a private task, you might be more inclined to interact.
+- If in a common area (e.g., 'Living Room', 'Kitchen') and you see a known character nearby who doesn't seem busy, consider initiating a short conversation.
+- If emotion is positive or neutral and not on a private task, you might be more inclined to interact.
 - If choosing to interact socially:
-    - Your 'chosen_action' should clearly state this (e.g., "Go chat with [NPC Name]", "Approach [NPC Name] for a quick talk").
-    - Your 'target_coordinates' should be a sensible position near that NPC, respecting personal space (e.g., about {settings.VISIT_THRESHOLD_DISTANCE + 0.5:.1f} to {settings.VISIT_THRESHOLD_DISTANCE + 1.5:.1f} units away from them, in an open area).
-    - Set 'social_interaction_considered' to Yes in your priority_analysis.
+    - 'chosen_action' should state this (e.g., "Go chat with [NPC Name]").
+    - 'target_coordinates' should be near that NPC, respecting personal space.
+    - Set 'social_interaction_considered' to Yes in priority_analysis.
 """)
 
     prompt_components.append(f"""
 \n--- Apartment Access Rules (CRITICAL - MUST BE FOLLOWED) ---
-1.  Toilet ('bathroom' type): Enter only if its status is NOT 'OCCUPIED BY OTHER'. If occupied and you need to use it, your action should be to 'Wait near [Bathroom Landmark Name]' and target coordinates should be a valid waiting spot (e.g., an entrance of the bathroom if known, or a nearby clear spot).
-2.  Private Room ('bedroom' type): If it is NOT your room (check owner_id against your ID: {npc_info.npc_id}), you may only enter if its status is 'OWNER PRESENT'. AVOID if 'OWNER ABSENT'. If it is your own room, you can enter freely.
-3.  No physical doors to open. Movement between rooms is via clear passages.
-4.  Avoid targeting coordinates directly ON TOP of static furniture/obstacles. Aim for clear floor space near your intended interaction point.
+1.  Toilet ('bathroom' type): Enter only if its status is NOT 'OCCUPIED BY OTHER'. If occupied and you need to use it, action should be 'Wait near [Bathroom Name]', target a valid waiting spot.
+2.  Private Room ('bedroom' type): If NOT your room (owner_id != {npc_info.npc_id}), enter only if status is 'OWNER PRESENT'. AVOID if 'OWNER ABSENT'. Your own room is free to enter.
+3.  No physical doors. Movement is via clear passages.
+4.  Avoid targeting coordinates ON TOP of furniture. Aim for clear floor space.
 """)
 
     prompt_components.append(f"""
 \n--- YOUR TASK: Decide Action & Target (Strict YAML Output) ---
-Based on ALL the information above, your personality, current state, and rules:
-1.  **Analyze Primary Drivers & Constraints:** What are the key factors influencing your decision? (Dialogue/Player Req/Prior Fail/Intent? Schedule? Emotion? Social Opportunity? Memory? Access Rules for Toilet/Private Room? Revisit Rule? General Exploration?)
-2.  **Reasoning & Conflict Resolution:** Briefly explain your thought process. How do you prioritize conflicting goals or rules? Access rules and the Revisit rule are high priority. Social interaction is a valid choice if conditions are appropriate.
-3.  **Chosen Action:** A concise, in-character phrase describing what you will do.
-4.  **Target Coordinates:** Precise (x,y) coordinates for your destination. This MUST be within scene boundaries and respect ALL access and revisit rules. If waiting for an occupied landmark, target a sensible waiting spot near an entrance if possible.
-5.  **Resulting Emotion Tag:** Your likely primary emotion after this decision (e.g., 'neutral', 'content', 'slightly_curious'). Use 'no_change' if your emotion is stable.
+Based on ALL info, your personality, state, and rules:
+1.  **Analyze Primary Drivers & Constraints:** Key factors? (Dialogue/Player Req/Intent? Schedule? Emotion? Social? Memory? Access Rules? Revisit Rule? Exploration?)
+2.  **Reasoning & Conflict Resolution:** Brief thought process. How to prioritize? (Access & Revisit rules are high priority. Social is valid if appropriate.)
+3.  **Chosen Action:** Concise, in-character phrase.
+4.  **Target Coordinates:** Precise (x,y) within bounds, respecting ALL rules. If waiting, target a sensible waiting spot.
+5.  **Resulting Emotion Tag:** Likely new emotion or 'no_change'.
 
-Respond ONLY with the YAML structure below. Do NOT include any text before the `priority_analysis:` line or after the final `resulting_emotion_tag:` line. Ensure correct YAML indentation.
+Respond ONLY with the YAML structure below. NO extra text before or after. Correct YAML indentation is CRUCIAL.
 ```yaml
 priority_analysis:
   dialogue_driven: Yes/No
@@ -323,7 +302,7 @@ priority_analysis:
   access_rules_consideration: Yes/No
   exploration_driven: Yes/No
 reasoning: |
-  [Your concise reasoning here. Max 2-3 sentences.]
+  [Your concise reasoning here. Max 1-2 sentences.]
 chosen_action: "[Your short, in-character action phrase here]"
 target_coordinates: "x=<float_value>, y=<float_value>"
 resulting_emotion_tag: "[Your new primary emotion tag or 'no_change']"

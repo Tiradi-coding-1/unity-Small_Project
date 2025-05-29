@@ -857,41 +857,64 @@ public class NpcController : MonoBehaviour
         ChangeState(NpcBehaviorState.PostInteractionPause);
     }
 
-    public void ShowDialogueBubble_TMP(string message, float duration)
+public void ShowDialogueBubble_TMP(string message, float duration)
+{
+    Debug.Log($"[Bubble DEBUG] NPC '{_characterData.characterName}' 嘗試顯示氣泡內容：{message}");
+
+    if (dialogueBubblePrefab_TMP == null)
     {
-        if (dialogueBubblePrefab_TMP == null) {
-            if (dialogueUIManager != null && dialogueUIManager.gameObject.activeInHierarchy) {
-                dialogueUIManager.ShowDialogue(_characterData.characterName, message, duration);
-            } else {
-                string charName = _characterData != null ? _characterData.characterName : "Unknown NPC";
-                Debug.LogError($"[{charName}] Dialogue Bubble Prefab (TMP) not assigned and no fallback UI! Msg: {message}", this);
-            }
-            return;
+        Debug.LogWarning($"[Bubble WARNING] NPC '{_characterData.characterName}' 沒有指定 dialogueBubblePrefab_TMP！");
+        
+        if (dialogueUIManager != null && dialogueUIManager.gameObject.activeInHierarchy)
+        {
+            dialogueUIManager.ShowDialogue(_characterData.characterName, message, duration);
         }
+        else
+        {
+            Debug.LogError($"[Bubble ERROR] '{_characterData.characterName}' 缺少 prefab 且無法 fallback 至 UIManager，訊息如下：{message}", this);
+        }
+        return;
+    }
 
-        if (_hideBubbleCoroutine != null) {
-            StopCoroutine(_hideBubbleCoroutine);
-            _hideBubbleCoroutine = null;
-        }
-        if (_currentDialogueBubbleInstance == null) {
-            Vector3 bubblePosition = transform.position + Vector3.up * dialogueBubbleOffsetY;
-            _currentDialogueBubbleInstance = Instantiate(dialogueBubblePrefab_TMP, bubblePosition, Quaternion.identity, transform);
-            _dialogueTextTMP = _currentDialogueBubbleInstance.GetComponentInChildren<TextMeshProUGUI>();
-            if (_dialogueTextTMP == null) _dialogueTextTMP = _currentDialogueBubbleInstance.GetComponent<TextMeshProUGUI>();
-        }
+    if (_hideBubbleCoroutine != null)
+    {
+        StopCoroutine(_hideBubbleCoroutine);
+        _hideBubbleCoroutine = null;
+    }
 
-        if (_dialogueTextTMP != null) {
-            _dialogueTextTMP.text = message;
-            _currentDialogueBubbleInstance.SetActive(true);
-            if (duration > 0) {
-                _hideBubbleCoroutine = StartCoroutine(HideDialogueBubbleAfterDelay_TMP(duration));
-            }
-        } else {
-            string charName = _characterData != null ? _characterData.characterName : "Unknown NPC";
-            Debug.LogError($"[{charName}] Dialogue Bubble Prefab (TMP) missing TextMeshProUGUI.", this);
-            if (_currentDialogueBubbleInstance != null) Destroy(_currentDialogueBubbleInstance);
+    if (_currentDialogueBubbleInstance == null)
+    {
+        Vector3 bubblePosition = transform.position + Vector3.up * dialogueBubbleOffsetY;
+        _currentDialogueBubbleInstance = Instantiate(dialogueBubblePrefab_TMP, bubblePosition, Quaternion.identity, transform);
+        Debug.Log($"[Bubble DEBUG] 已實例化對話氣泡於位置：{bubblePosition}");
+
+        _dialogueTextTMP = _currentDialogueBubbleInstance.GetComponentInChildren<TextMeshProUGUI>();
+        if (_dialogueTextTMP == null)
+        {
+            _dialogueTextTMP = _currentDialogueBubbleInstance.GetComponent<TextMeshProUGUI>();
         }
     }
+
+    if (_dialogueTextTMP != null)
+    {
+        _dialogueTextTMP.text = message;
+        Debug.Log($"[Bubble DEBUG] 設定 TextMeshProUGUI 為：{message}");
+        _currentDialogueBubbleInstance.SetActive(true);
+
+        if (duration > 0)
+        {
+            _hideBubbleCoroutine = StartCoroutine(HideDialogueBubbleAfterDelay_TMP(duration));
+        }
+    }
+    else
+    {
+        Debug.LogError($"[Bubble ERROR] '{_characterData.characterName}' 的 Dialogue Bubble Prefab 中沒有找到 TextMeshProUGUI 元件！", this);
+        if (_currentDialogueBubbleInstance != null)
+        {
+            Destroy(_currentDialogueBubbleInstance);
+        }
+    }
+}
 
     private IEnumerator HideDialogueBubbleAfterDelay_TMP(float delay)
     {

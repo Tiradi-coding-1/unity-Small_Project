@@ -6,6 +6,7 @@ from app.core.config import settings_instance as settings
 from app.core.logging_config import setup_logging
 from app.core.schemas import Message, OllamaChatOptions 
 from datetime import datetime, timezone
+import httpx # For httpx.ReadTimeout
 
 logger = setup_logging(__name__)
 
@@ -41,33 +42,38 @@ class OllamaService:
                 if isinstance(available_models_list, list) and available_models_list:
                     for i, model_obj in enumerate(available_models_list):
                         model_identifier = None
-                        # Try 'model' attribute first, then 'name' as fallback
-                        # Based on logs: Type: <class 'ollama._types.ListResponse.Model'>. Data: model='yi:6b'
-                        if hasattr(model_obj, 'model') and model_obj.model:
-                            model_identifier = model_obj.model
-                        elif hasattr(model_obj, 'name') and model_obj.name: 
-                            model_identifier = model_obj.name
+                        # *** 新增日誌以檢查 model_obj 的確切結構 ***
+                        logger.debug(f"Ollama list() item at index {i}: type={type(model_obj)}, dir={dir(model_obj)}, str='{str(model_obj)[:200]}'")
                         
+                        # 優先嘗試 'model' 屬性 (根據之前日誌中 <class 'ollama._types.ListResponse.Model'> 的 Data 部分)
+                        if hasattr(model_obj, 'model') and isinstance(getattr(model_obj, 'model'), str) and getattr(model_obj, 'model'):
+                            model_identifier = getattr(model_obj, 'model')
+                        # 其次嘗試 'name' 屬性 (ollama 庫中 ModelResponse TypedDict 的定義)
+                        elif hasattr(model_obj, 'name') and isinstance(getattr(model_obj, 'name'), str) and getattr(model_obj, 'name'): 
+                            model_identifier = getattr(model_obj, 'name')
+                        # 如果 model_obj 本身就是一個字典 (有些版本的 ollama 庫可能這樣返回)
+                        elif isinstance(model_obj, dict):
+                            model_identifier = model_obj.get('model') or model_obj.get('name')
+
                         if model_identifier:
                             model_names.append(model_identifier)
                         else:
-                            logger.warning(f"Ollama model data at index {i} missing 'model' or 'name' attribute, or it's empty. Object type: {type(model_obj)}. Data: {str(model_obj)[:200]}...")
+                            logger.warning(f"Could not extract a valid model identifier from Ollama list item at index {i}.")
                             model_names.append(None) 
                 elif not available_models_list and isinstance(available_models_list, list):
-                     logger.info("Ollama reports no models are currently available/downloaded via client.list(). This is OK if you intend to use specific model names directly.")
+                     logger.info("Ollama reports no models are currently available/downloaded via client.list(). This is OK if you intend to use specific model names directly in requests.")
                 else:
-                    logger.warning(f"Ollama 'models' field from client.list() is not a list or is missing. Response: {response_data}")
+                    logger.warning(f"Ollama 'models' field from client.list() is not a list or is missing. Response: {str(response_data)[:500]}")
 
                 valid_model_names = [name for name in model_names if name is not None]
-                if not valid_model_names and available_models_list: # If list was not empty but we parsed no names
+                if not valid_model_names and available_models_list: 
                     logger.warning(
-                        f"Could not parse any valid model names from client.list() response, though models were present. "
+                        f"Could not parse any valid model names from client.list() response, though models were present in the raw response. "
                         f"Attempted model identifiers (including None for errors): {model_names}. "
                         f"Please ensure Ollama is running, models are pulled, and OLLAMA_HOST ('{settings.OLLAMA_HOST}') is correct."
                     )
-                elif valid_model_names: # If we successfully parsed some names
+                elif valid_model_names: 
                     logger.info(f"Successfully connected to Ollama. Parsed available model identifiers from client.list(): {valid_model_names}")
-                # If available_models_list was empty from the start, the earlier log message is sufficient.
                 
                 cls._client = temp_client
                 cls._is_initialized_successfully = True 
@@ -75,6 +81,8 @@ class OllamaService:
 
             except ollama.ResponseError as e_api: 
                 logger.error(f"Ollama API error during initial model list (host: {settings.OLLAMA_HOST}): {e_api.status_code} - {e_api.error}", exc_info=True)
+            except httpx.ReadTimeout as e_timeout:
+                logger.error(f"Ollama connection timed out during initial model list (host: {settings.OLLAMA_HOST}): {e_timeout}", exc_info=True)
             except Exception as e_connect: 
                 logger.error(f"Connection or other error during initial model list (host: {settings.OLLAMA_HOST}): {e_connect}", exc_info=True)
         
@@ -134,17 +142,19 @@ class OllamaService:
                 model_dict = {}
                 model_identifier = None
 
-                # Prefer 'model' attribute if present, then 'name'
-                if hasattr(model_obj, 'model') and model_obj.model: 
-                    model_identifier = model_obj.model
-                    model_dict['name'] = model_obj.model # Use 'name' in our dict for consistency
-                elif hasattr(model_obj, 'name') and model_obj.name: 
-                    model_identifier = model_obj.name
-                    model_dict['name'] = model_obj.name
+                if hasattr(model_obj, 'model') and isinstance(getattr(model_obj, 'model'), str) and getattr(model_obj, 'model'): 
+                    model_identifier = model_obj.model # type: ignore
+                    model_dict['name'] = model_obj.model # type: ignore
+                elif hasattr(model_obj, 'name') and isinstance(getattr(model_obj, 'name'), str) and getattr(model_obj, 'name'): 
+                    model_identifier = model_obj.name # type: ignore
+                    model_dict['name'] = model_obj.name # type: ignore
+                elif isinstance(model_obj, dict): # Fallback if it's a dict
+                    model_identifier = model_obj.get('model') or model_obj.get('name')
+                    model_dict['name'] = model_identifier
                 
-                if hasattr(model_obj, 'modified_at'): model_dict['modified_at'] = str(model_obj.modified_at)
-                if hasattr(model_obj, 'size'): model_dict['size'] = int(model_obj.size) 
-                if hasattr(model_obj, 'digest'): model_dict['digest'] = str(model_obj.digest)
+                if hasattr(model_obj, 'modified_at'): model_dict['modified_at'] = str(getattr(model_obj, 'modified_at'))
+                if hasattr(model_obj, 'size'): model_dict['size'] = int(getattr(model_obj, 'size'))
+                if hasattr(model_obj, 'digest'): model_dict['digest'] = str(getattr(model_obj, 'digest'))
                 
                 details_attr = getattr(model_obj, 'details', None) 
                 if isinstance(details_attr, dict): 
@@ -156,7 +166,9 @@ class OllamaService:
                     models_as_dicts.append(model_dict)
                     model_identifiers_for_log.append(model_identifier)
                 else:
-                    logger.warning(f"Could not extract 'model' or 'name' attribute from a model object: {str(model_obj)[:200]}")
+                    attrs = dir(model_obj) if not isinstance(model_obj, dict) else model_obj.keys()
+                    logger.warning(f"Could not extract 'model' or 'name' attribute from a model object: Type: {type(model_obj)}, Attrs/Keys: {attrs}, Data: {str(model_obj)[:200]}")
+
 
             if log_success:
                 if not model_identifiers_for_log and available_models_obj_list: 
@@ -169,6 +181,9 @@ class OllamaService:
             
         except ollama.ResponseError as e: 
             logger.error(f"Ollama API error when listing models: {e.status_code} - {e.error}", exc_info=True)
+            raise
+        except httpx.ReadTimeout as e_timeout:
+            logger.error(f"Ollama connection timed out when listing models: {e_timeout}", exc_info=True)
             raise
         except Exception as e:
             logger.error(f"Unexpected error listing Ollama models: {e}", exc_info=True)
@@ -194,7 +209,11 @@ class OllamaService:
         effective_model = model if model else settings.DEFAULT_OLLAMA_MODEL
         if not effective_model:
              logger.error("No Ollama model specified for chat completion and no default model is configured.")
-             raise ValueError("Ollama model name must be provided or a default set in configuration.")
+             return {
+                "model": "N/A", "created_at": datetime.now(timezone.utc).isoformat(),
+                "message": {"role": "assistant", "content": "[Configuration Error: No model specified]"},
+                "done": True, "done_reason": "error", "error": "No Ollama model specified"
+            }
 
         ollama_options_dict: Optional[Dict[str, Any]] = None
         if options: 
@@ -227,6 +246,7 @@ class OllamaService:
                             yield {
                                 "model": effective_model,
                                 "created_at": datetime.now(timezone.utc).isoformat(),
+                                "message": {"role": "assistant", "content": "[Stream Error: Not an async generator]"},
                                 "error": "Stream initialization failed, expected async generator.",
                                 "done": True
                             }
@@ -251,8 +271,8 @@ class OllamaService:
                         yield {
                             "model": effective_model,
                             "created_at": datetime.now(timezone.utc).isoformat(),
-                            "error": f"Ollama API Error: {e_stream.error}",
                             "message": {"role": "assistant", "content": f"[Stream Error: {e_stream.error}]"},
+                            "error": f"Ollama API Error: {e_stream.error}",
                             "done": True,
                             "done_reason": "error"
                         }
@@ -261,8 +281,8 @@ class OllamaService:
                         yield {
                             "model": effective_model,
                             "created_at": datetime.now(timezone.utc).isoformat(),
-                            "error": f"Unexpected stream error: {type(e_stream_unexpected).__name__}",
                             "message": {"role": "assistant", "content": f"[Unexpected Stream Error: {type(e_stream_unexpected).__name__}]"},
+                            "error": f"Unexpected stream error: {type(e_stream_unexpected).__name__}",
                             "done": True,
                             "done_reason": "error"
                         }
@@ -305,44 +325,39 @@ class OllamaService:
         
         except ollama.ResponseError as e: 
             logger.error(f"Ollama API error (model: {effective_model}): {e.status_code} - {e.error}", exc_info=True)
-            # Construct a dictionary that mimics the expected error structure if possible
-            # This helps services consuming this method to handle errors more gracefully.
             return {
-                "model": effective_model,
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "model": effective_model, "created_at": datetime.now(timezone.utc).isoformat(),
                 "message": {"role": "assistant", "content": f"[Ollama API Error: {e.error}]"},
-                "done": True,
-                "done_reason": "error",
-                "error": f"Ollama API Error: Status {e.status_code} - {e.error}" # Add specific error info
+                "done": True, "done_reason": "error", "error": f"Ollama API Error: Status {e.status_code} - {e.error}"
+            }
+        except httpx.ReadTimeout as e_timeout: 
+            logger.error(f"Ollama ReadTimeout during chat (model: {effective_model}): {e_timeout}", exc_info=True)
+            return {
+                "model": effective_model, "created_at": datetime.now(timezone.utc).isoformat(),
+                "message": {"role": "assistant", "content": f"[Ollama ReadTimeout Error: {str(e_timeout)}]"}, # Ensure str(e_timeout)
+                "done": True, "done_reason": "timeout", "error": f"Ollama ReadTimeout Error: {str(e_timeout)}"
             }
         except ConnectionError as e_conn: 
             logger.error(f"Ollama connection error during chat (model: {effective_model}): {e_conn}", exc_info=True)
-            raise # Re-raise to be caught by global handler
-        except ValueError as ve: # Catch potential ValueErrors from model name issues etc.
+            raise 
+        except ValueError as ve: 
             logger.error(f"ValueError during Ollama chat setup (model: {effective_model}): {ve}", exc_info=True)
-            return { # Return an error structure
-                "model": effective_model,
-                "created_at": datetime.now(timezone.utc).isoformat(),
+            return { 
+                "model": effective_model, "created_at": datetime.now(timezone.utc).isoformat(),
                 "message": {"role": "assistant", "content": f"[Configuration Error: {ve}]"},
-                "done": True,
-                "done_reason": "error",
-                "error": f"Configuration Error: {ve}"
+                "done": True, "done_reason": "error", "error": f"Configuration Error: {ve}"
             }
         except Exception as e: 
             logger.error(f"Unexpected error during Ollama chat (model: {effective_model}): {e}", exc_info=True)
-            # For truly unexpected errors, also return an error structure
             return {
-                "model": effective_model,
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "model": effective_model, "created_at": datetime.now(timezone.utc).isoformat(),
                 "message": {"role": "assistant", "content": f"[Unexpected Server Error: {type(e).__name__}]"},
-                "done": True,
-                "done_reason": "error",
-                "error": f"Unexpected Server Error: {type(e).__name__} - {str(e)}"
+                "done": True, "done_reason": "error", "error": f"Unexpected Server Error: {type(e).__name__} - {str(e)}"
             }
 
 
 async def get_ollama_service() -> OllamaService:
     if not OllamaService.is_ready():
         logger.critical("get_ollama_service dependency called but OllamaService is not ready. This indicates a critical issue with Ollama client initialization.")
-        raise HTTPException(status_code=503, detail="Ollama service client is not initialized or unavailable.")
+        raise HTTPException(status_code=503, detail="Ollama service client is not initialized or unavailable.") # type: ignore
     return OllamaService
