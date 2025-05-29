@@ -11,7 +11,7 @@ import yaml # For parsing YAML-like LLM output
 from app.core.schemas import (
     NPCMovementRequest, NPCMovementResponse, Position, NPCIdentifier,
     LandmarkContextInfo, EntityContextInfo, SceneBoundaryInfo, NPCEmotionalState,
-    GameTime, Message, MessageRole, # <<<--- 添加 MessageRole
+    GameTime, Message, MessageRole,
     OllamaChatOptions, NPCMemoryFile, default_aware_utcnow
 )
 from app.llm.ollama_client import OllamaService
@@ -42,12 +42,12 @@ class MovementService:
         Now includes 'access_rules_consideration'.
         """
         parsed_data: Dict[str, Any] = { 
-            "priority_analysis": { # Initialize with all expected keys for safety
+            "priority_analysis": {
                 "dialogue_driven": False,
                 "schedule_driven": False,
                 "emotion_driven": False,
                 "memory_driven": False,
-                "access_rules_consideration": False, # New field
+                "access_rules_consideration": False,
                 "exploration_driven": False
             },
             "reasoning": "LLM did not provide clear reasoning.",
@@ -69,7 +69,6 @@ class MovementService:
             try:
                 data = yaml.safe_load(cleaned_response)
                 if isinstance(data, dict):
-                    # Safely get priority_analysis, ensuring all keys are present
                     pa_data = data.get("priority_analysis", {})
                     parsed_data["priority_analysis"]["dialogue_driven"] = str(pa_data.get("dialogue_driven", "No")).lower() == "yes"
                     parsed_data["priority_analysis"]["schedule_driven"] = str(pa_data.get("schedule_driven", "No")).lower() == "yes"
@@ -90,7 +89,6 @@ class MovementService:
             except yaml.YAMLError as ye:
                 logger.warning(f"YAML parsing failed for LLM output: {ye}. Falling back to regex. Output: '{cleaned_response[:200]}...'")
 
-            # Fallback to Regex if YAML parsing fails (more brittle)
             pa_block_match = re.search(r"priority_analysis:(.*?)(reasoning:)", cleaned_response, re.DOTALL | re.IGNORECASE)
             if pa_block_match:
                 pa_text = pa_block_match.group(1)
@@ -122,7 +120,6 @@ class MovementService:
         
         return parsed_data
 
-
     async def _find_fallback_exploration_target(
         self,
         npc_id_str: str, 
@@ -130,25 +127,16 @@ class MovementService:
         landmarks: List[LandmarkContextInfo],
         bounds: SceneBoundaryInfo,
         memory_service: NPCMemoryService, 
-        current_game_time: GameTime,
-        # For apartment, "other_entities" might influence exploration more (e.g., avoid crowded common rooms)
+        current_game_time: GameTime, # MODIFIED: This is the full GameTime object
         other_entities: Optional[List[EntityContextInfo]] = None 
     ) -> Tuple[float, float]:
-        """
-        Fallback strategy for apartment exploration. Prioritizes accessible common areas
-        or own room if bored, avoiding recently visited or restricted areas.
-        """
         logger.info(f"NPC '{npc_id_str}': Executing FALLBACK exploration strategy for apartment from ({current_pos.x:.1f}, {current_pos.y:.1f}).")
         potential_targets: List[Dict[str, Any]] = []
 
-        # 1. Consider accessible landmarks (common areas, own room) not recently visited
         for lm in landmarks:
-            # Rule checks (simplified version, full check in NpcController and prompt)
             is_accessible = True
-            # Check bathroom
             if lm.landmark_type_tag == "bathroom" and any("occupancy_occupied" in note for note in lm.current_status_notes):
                 is_accessible = False
-            # Check private room
             elif lm.landmark_type_tag == "bedroom" and lm.owner_id and lm.owner_id != npc_id_str and \
                  any("owner_presence_absent" in note for note in lm.current_status_notes):
                 is_accessible = False
@@ -158,21 +146,17 @@ class MovementService:
                 continue
 
             dist_to_lm = current_pos.distance_to(lm.position)
-            # For apartment, exploration distances might be smaller
-            # Allow targeting own room or common areas even if relatively close, if bored
             if settings.MIN_SEARCH_DISTANCE_FOR_NEW_POINT * 0.5 <= dist_to_lm <= settings.MAX_SEARCH_DISTANCE_FOR_NEW_POINT * 0.7:
                 score = 50
                 if lm.landmark_type_tag in ["living_room", "kitchen", "dining_room"]:
-                    score += 20 # Prefer common areas for general exploration
+                    score += 20
                 elif lm.landmark_type_tag == "bedroom" and lm.owner_id == npc_id_str:
-                    score += 15 # Own room is a safe bet
+                    score += 15
                 potential_targets.append({"x": lm.position.x, "y": lm.position.y, "type": f"landmark:{lm.landmark_name}", "base_score": score})
         
-        # 2. Generate random exploration points within a reasonable annulus, biased towards common areas if possible
-        num_random_points = 10 # Fewer random points, more focus on known areas
+        num_random_points = 10
         for i in range(num_random_points):
             angle = random.uniform(0, 2 * math.pi)
-            # Smaller exploration distance for apartment interiors
             distance = random.uniform(
                 settings.MIN_SEARCH_DISTANCE_FOR_NEW_POINT * 0.7, 
                 settings.MAX_SEARCH_DISTANCE_FOR_NEW_POINT * 0.5 
@@ -192,20 +176,20 @@ class MovementService:
             x_clamped, y_clamped = clamp_position_to_bounds(pt["x"], pt["y"], bounds, settings.SCENE_BOUNDARY_BUFFER)
             
             dist_from_current = current_pos.distance_to(Position(x=x_clamped, y=y_clamped))
-            if dist_from_current < settings.MIN_SEARCH_DISTANCE_FOR_NEW_POINT * 0.3: # Must be some meaningful distance away
+            if dist_from_current < settings.MIN_SEARCH_DISTANCE_FOR_NEW_POINT * 0.3:
                 continue
             
             score = float(pt["base_score"])
-            if await memory_service.has_been_visited_recently(x_clamped, y_clamped, current_game_time):
-                score -= 300  # Heavily penalize recently visited
+            # MODIFIED: Pass current_game_time.current_timestamp (which is a datetime object)
+            if await memory_service.has_been_visited_recently(x_clamped, y_clamped, current_game_time.current_timestamp):
+                score -= 300
             else:
                 score += 100
             
-            # Avoid areas that are currently crowded if info is available (conceptual)
             if other_entities:
                 for entity_info in other_entities:
-                    if Position(x=x_clamped,y=y_clamped).distance_to(Position(x=entity_info.x,y=entity_info.y)) < 2.0: # If target is too close to another NPC
-                        score -= 25 # Slight penalty for crowdedness
+                    if Position(x=x_clamped,y=y_clamped).distance_to(Position(x=entity_info.x,y=entity_info.y)) < 2.0:
+                        score -= 25
 
             score += random.uniform(-15, 15) 
 
@@ -235,11 +219,6 @@ class MovementService:
         npc_memory.last_known_position = request_data.current_npc_position
         npc_memory.last_known_game_time = request_data.current_game_time
         
-        # Pass previous_movement_failure_reason to prompt builder if available in request_data
-        # This requires NpcMovementRequest schema to have such a field.
-        # Let's assume prompt builder handles this from 'recent_dialogue_summary_for_movement' or a new param.
-        # The C# NpcController now augments 'recent_dialogue_summary_for_movement' if _lastMovementAbortReason exists.
-
         system_prompt_for_llm = build_npc_movement_decision_prompt(
             npc_info=npc_id_obj,
             personality_description=npc_memory.personality_description,
@@ -248,11 +227,11 @@ class MovementService:
             emotional_state=npc_memory.current_emotional_state, 
             active_schedule_rules=npc_memory.active_schedule_rules, 
             other_entities_nearby=request_data.nearby_entities,
-            visible_landmarks=request_data.visible_landmarks, # Crucial: these landmarks now contain dynamic status notes
+            visible_landmarks=request_data.visible_landmarks,
             scene_boundaries=request_data.scene_boundaries,
             short_term_location_history=npc_memory.short_term_location_history,
             relevant_long_term_memories=await memory_service.get_relevant_long_term_memories(limit=5),
-            recent_dialogue_summary=request_data.recent_dialogue_summary_for_movement, # This now might contain abort reason
+            recent_dialogue_summary=request_data.recent_dialogue_summary_for_movement,
             explicit_player_movement_request=request_data.explicit_player_movement_request
         )
         
@@ -264,18 +243,15 @@ class MovementService:
 
         try:
             effective_model = request_data.model_override or settings.DEFAULT_OLLAMA_MODEL
-            # Apartment decisions might benefit from slightly higher temperature for variability, or lower for strict rule following. Test.
             llm_options = OllamaChatOptions(temperature=0.65, num_ctx=settings.DEFAULT_MAX_TOKENS, top_k=45, top_p=0.92) 
 
-            # *** MODIFICATION FOR FIX 1 START ***
             messages_for_llm = [Message(role=MessageRole.SYSTEM, content=system_prompt_for_llm)]
             ollama_response_data = await self.ollama_service.generate_chat_completion(
                 model=effective_model,
-                messages=messages_for_llm, # Pass List[Message]
+                messages=messages_for_llm,
                 stream=False,
-                options=llm_options # Pass OllamaChatOptions object directly
+                options=llm_options
             )
-            # *** MODIFICATION FOR FIX 1 END ***
             
             llm_raw_response_text = ollama_response_data.get('message', {}).get('content', "")
             logger.debug(f"NPC '{npc_id_obj.npc_id}' LLM Raw Response for movement: '{llm_raw_response_text[:300]}...'")
@@ -290,11 +266,8 @@ class MovementService:
         except Exception as e: 
             logger.error(f"Error during LLM interaction or parsing for NPC '{npc_id_obj.npc_id}': {e}", exc_info=True)
             decision_context_summary = f"Error during LLM phase: {type(e).__name__}. Fallback will be used."
-            parsed_llm_output = self._parse_structured_llm_movement_output("") # Get default structure
+            parsed_llm_output = self._parse_structured_llm_movement_output("")
 
-        # Game Logic & Fallbacks (NpcController also does a check, this is a server-side pre-check/reinforcement)
-        # The NpcController's check is the final gatekeeper.
-        # Here, we primarily react if LLM *itself* failed to provide a target.
         if llm_chosen_target_pos:
             clamped_x, clamped_y = clamp_position_to_bounds(
                 llm_chosen_target_pos.x, llm_chosen_target_pos.y,
@@ -307,22 +280,19 @@ class MovementService:
                 decision_context_summary += " (Note: LLM target was clamped to scene boundaries)."
             
             logger.info(f"NPC '{npc_id_obj.npc_id}': LLM proposed target {final_target_position}. Unity-side controller will perform final access checks.")
-            # Server-side check for "has_been_visited_recently" could be added here too if desired,
-            # but NpcController's prompt now includes this, and its re-evaluation is the primary mechanism.
         else: 
             logger.warning(f"NPC '{npc_id_obj.npc_id}': No valid target from LLM. Triggering fallback exploration. Summary: {decision_context_summary}")
             fx, fy = await self._find_fallback_exploration_target(
                 npc_id_obj.npc_id, request_data.current_npc_position, request_data.visible_landmarks,
-                request_data.scene_boundaries, memory_service, request_data.current_game_time, request_data.nearby_entities
+                request_data.scene_boundaries, memory_service, request_data.current_game_time, request_data.nearby_entities # MODIFIED: Pass full GameTime object
             )
             final_target_position = Position(x=fx, y=fy)
             parsed_llm_output["chosen_action"] = f"Fallback exploration towards ({fx:.1f}, {fy:.1f})."
             if "LLM did not provide" in decision_context_summary: 
                  decision_context_summary = "Fallback exploration triggered due to LLM failure to provide coordinates."
         
-        # Update NPC Memory
-        # Adding to short-term history now helps if an immediate re-decision occurs due to NpcController block.
-        await memory_service.add_visited_location(final_target_position.x, final_target_position.y, default_aware_utcnow()) # Use current server time for this temp entry
+        # MODIFIED: Pass request_data.current_game_time.current_timestamp (which is a datetime object)
+        await memory_service.add_visited_location(final_target_position.x, final_target_position.y, request_data.current_game_time.current_timestamp)
         
         new_emotion_tag = parsed_llm_output.get("resulting_emotion_tag", "no_change")
         updated_emotional_state_snapshot = npc_memory.current_emotional_state 
@@ -332,9 +302,9 @@ class MovementService:
                 intensity=npc_memory.current_emotional_state.intensity, 
                 reason=f"Decision: {parsed_llm_output.get('chosen_action', 'Unknown')}"
             )
-            updated_emotional_state_snapshot = (await memory_service.get_memory_data()).current_emotional_state # Get the updated one
+            updated_emotional_state_snapshot = (await memory_service.get_memory_data()).current_emotional_state
         
-        await memory_service.save_memory_to_file() # Save changes, especially emotional state and history
+        await memory_service.save_memory_to_file()
 
         self._log_movement_decision_details(request_data, system_prompt_for_llm, llm_raw_response_text, final_target_position, decision_context_summary, parsed_llm_output)
 
@@ -346,7 +316,7 @@ class MovementService:
             llm_full_reasoning_text=parsed_llm_output.get('reasoning', llm_raw_response_text), 
             chosen_action_summary=parsed_llm_output.get('chosen_action', "Action determined by fallback."),
             target_destination=final_target_position,
-            primary_decision_drivers=parsed_llm_output.get("priority_analysis", {}), # This now includes access_rules_consideration
+            primary_decision_drivers=parsed_llm_output.get("priority_analysis", {}),
             updated_emotional_state_snapshot=updated_emotional_state_snapshot,
             api_processing_time_ms=round(api_processing_time_ms, 2)
         )
@@ -360,16 +330,14 @@ class MovementService:
             "npc_id": request.npc_id,
             "request_summary": {
                 "current_pos": request.current_npc_position.model_dump(),
-                "game_time": request.current_game_time.model_dump(mode='json'), # Serialize datetime correctly
+                "game_time": request.current_game_time.model_dump(mode='json'),
                 "dialogue_summary_input": request.recent_dialogue_summary_for_movement,
                 "player_request_input": request.explicit_player_movement_request.model_dump(mode='json') if request.explicit_player_movement_request else None
             },
-            # "prompt_sent_to_llm": prompt, # Log selectively due to verbosity
             "llm_raw_response_snippet": llm_response_raw[:500] + "..." if len(llm_response_raw) > 500 else llm_response_raw,
             "llm_parsed_output": parsed_llm_output,
             "decision_reason_summary": reason_summary,
             "final_target_chosen": final_target.model_dump(),
         }
-        # Use a specific logger for these detailed traces if needed, or main logger with DEBUG level
         logger.debug(f"NPC Movement Trace for '{request.npc_id}': {log_entry}")
         logger.info(f"NPC Movement Decision for '{request.npc_id}': Target=({final_target.x:.1f},{final_target.y:.1f}). Action: '{parsed_llm_output.get('chosen_action')}'. Reason: {reason_summary[:100]}...")

@@ -13,25 +13,26 @@ class Settings(BaseSettings):
 
     # --- Ollama Settings ---
     OLLAMA_HOST: str = "http://localhost:11434"
-    # 預設值，會被 .env 檔案中的設定覆蓋
-    DEFAULT_OLLAMA_MODEL: str = "llama3"
-    DEFAULT_TRANSLATION_MODEL: str = "llama3"
-    OLLAMA_REQUEST_TIMEOUT: int = 60
-    DEFAULT_MAX_TOKENS: int = 4096
+    # Default model names; it's STRONGLY recommended to set these via your .env file
+    # to match the exact models you have pulled and intend to use (e.g., "llama3.1:8b", "gemma:2b")
+    DEFAULT_OLLAMA_MODEL: str = "llama3" 
+    DEFAULT_TRANSLATION_MODEL: str = "llama3" # Or a smaller model like "gemma:2b" if preferred for translation
+    OLLAMA_REQUEST_TIMEOUT: int = 60 # MODIFIED: Default timeout. Configure a higher value in .env for your performance target.
+    DEFAULT_MAX_TOKENS: int = 4096 # Desired context window size from settings, actual may be model-dependent.
 
     # --- CORS Settings ---
     ENABLE_CORS: bool = True
     ALLOWED_ORIGINS: Union[str, List[str]] = "*"
 
     # --- Logging Settings ---
-    LOG_LEVEL: str = "INFO"
+    LOG_LEVEL: str = "INFO" # Recommended: "DEBUG" for development, "INFO" for production.
     LOG_TO_FILE: bool = True
-    LOG_FILE_PATH: Path = Path("npc_logs/npc_api_suite_apartment.log")
-    LOG_ROTATION_SIZE: str = "10 MB"
+    LOG_FILE_PATH: Path = Path("npc_logs/npc_api_suite_apartment.log") # MODIFIED
+    LOG_ROTATION_SIZE: str = "10 MB" 
     LOG_RETENTION_COUNT: int = 5
 
     # --- NPC Movement & Memory Settings (Adjusted for Apartment Scene) ---
-    NPC_MEMORY_DIR: Path = Path("npc_memory_apartment")
+    NPC_MEMORY_DIR: Path = Path("npc_memory_apartment") # MODIFIED
     MAX_LOCATIONS_IN_MEMORY: int = 15
     MAX_LONG_TERM_MEMORY_ENTRIES: int = 50
     
@@ -44,33 +45,32 @@ class Settings(BaseSettings):
     # --- API Server Settings ---
     SERVER_HOST: str = "0.0.0.0"
     SERVER_PORT: int = 8000
-    DEBUG_RELOAD: bool = False # 生產環境中建議設為 False
+    DEBUG_RELOAD: bool = False # Set to True for development if Uvicorn should auto-reload on code changes.
 
     # --- NPC Memory Cache Settings ---
     NPC_MEMORY_SAVE_ON_SHUTDOWN: bool = True
-    NPC_MEMORY_AUTO_SAVE_INTERVAL_SECONDS: Optional[int] = 300 # 每 5 分鐘儲存一次
+    NPC_MEMORY_AUTO_SAVE_INTERVAL_SECONDS: Optional[int] = 300 # e.g., every 5 minutes
 
     model_config = SettingsConfigDict(
-        env_file=".env", # <<<--- 假設您的 .env 檔案名稱是 ".env"
-                         # 如果是 ".env_apartment"，請改回 ".env_apartment"
+        env_file=".env", 
         env_file_encoding='utf-8',
-        extra='ignore',
-        case_sensitive=False # Pydantic V2 預設行為，環境變數名稱不區分大小寫
+        extra='ignore', # Ignore extra fields from .env
+        case_sensitive=False # Environment variable names are case-insensitive
     )
 
-# 建立設定實例供其他模組使用
+# Create settings instance for other modules to use
 settings_instance = Settings()
 
-# 確保必要的目錄存在
+# Ensure necessary directories exist
 def ensure_directories_exist():
     """Ensures that directories specified in settings (like log and memory dirs) exist."""
-    # 確保 NPC 記憶檔案目錄存在
+    # Ensure NPC memory file directory exists
     settings_instance.NPC_MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     
-    # 如果啟用了檔案日誌，確保日誌檔案的父目錄存在
+    # If file logging is enabled, ensure the log file's parent directory exists
     if settings_instance.LOG_TO_FILE:
         log_file_parent_dir = settings_instance.LOG_FILE_PATH.parent
         log_file_parent_dir.mkdir(parents=True, exist_ok=True)
 
-# 在模組加載時執行目錄檢查和創建
+# Execute directory check and creation when the module is loaded
 ensure_directories_exist()
