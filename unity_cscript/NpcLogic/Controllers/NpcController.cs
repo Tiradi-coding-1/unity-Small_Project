@@ -375,7 +375,7 @@ public class NpcController : MonoBehaviour
     private void HandleArrivalAtMovementTarget(Vector3 arrivedAtPosition, bool wasFromLLMDecisionPipelineOrFreshTarget)
     {
         string source = wasFromLLMDecisionPipelineOrFreshTarget ? "LLM Decision Pipeline/Fresh Target" : "Post-Waiting Original Target";
-        // Debug.Log($"<color=#32CD32>[{_characterData.characterName}] HandleArrivalAtMovementTarget: Arrived at ({arrivedAtPosition.x:F1}, {arrivedAtPosition.y:F1}). Source: {source}. CurrentState: {_currentState}</color>");
+        // Debug.Log($"<color=#32CD32>[{_characterData.characterName}] HandleArrivalAtMovementTarget: Arrived at ({arrivedAtPosition.x:F1}, {arrivedAtPosition.y:F1}). Source: {source}. CurrentState: {_currentState}.</color>");
         _hasMovementTarget = false;
 
         if (_originalTargetLandmarkForWaiting != null && _currentState != NpcBehaviorState.WaitingNearTarget)
@@ -390,13 +390,13 @@ public class NpcController : MonoBehaviour
             }
 
             if (originalTargetIsStillUnavailable) {
-                // Debug.Log($"<color=yellow>[{_characterData.characterName}] Arrived at waiting spot for '{_originalTargetLandmarkForWaiting.landmarkName}' which is still unavailable. Transitioning to WaitingNearTarget state.</color>");
+                // Debug.Log($"<color=yellow>[{_characterData.characterName}] Arrived at waiting spot for '{_originalTargetLandmarkForWaiting.landmarkName}' which is still unavailable. Transitioning to WaitingNearTarget.</color>");
                 UpdateLandmarkStatusOnArrivalOrDeparture(arrivedAtPosition, true);
                 ChangeState(NpcBehaviorState.WaitingNearTarget);
                 return;
             } else {
                 if (wasFromLLMDecisionPipelineOrFreshTarget) {
-                    // Debug.Log($"<color=green>[{_characterData.characterName}] Arrived at suggested waiting spot, but original target '{_originalTargetLandmarkForWaiting.landmarkName}' is now available or no longer needs waiting. Will attempt to go to original target.</color>");
+                    // Debug.Log($"<color=green>[{_characterData.characterName}] Arrived at suggested waiting spot, but original target '{_originalTargetLandmarkForWaiting.landmarkName}' is now available. Moving to original target.</color>");
                     Vector3 originalTargetPos = _originalTargetLandmarkForWaiting.transform.position;
                      _currentMovementTargetWorld = new Vector3(originalTargetPos.x, originalTargetPos.y, transform.position.z);
                     _hasMovementTarget = true;
@@ -436,21 +436,21 @@ public class NpcController : MonoBehaviour
         if (distanceToCharActual <= dialogueInitiationDistance)
         {
             if (_npcMovement != null && _npcMovement.IsMoving()) _npcMovement.StopMovement();
-            // Debug.Log($"<color=orange>[{_characterData.characterName}] Reached/within dialogue range of '{_currentTargetInteractionCharacter.characterName}'. Actual dist: {distanceToCharActual:F1}. Starting dialogue.</color>");
+            // Debug.Log($"<color=orange>[{_characterData.characterName}] Reached/within dialogue range of '{_currentTargetInteractionCharacter.characterName}'. Actual dist: {distanceToCharActual:F2}. Starting dialogue.</color>");
             StartDialogueAsync(_currentTargetInteractionCharacter);
         }
         else if (_npcMovement != null && (!_npcMovement.IsMoving() || Vector3.Distance(_npcMovement.CurrentTargetPosition, pointToApproach) > 0.5f) )
         {
              _npcMovement.SetMoveTarget(pointToApproach, () => {
                 float finalDist = Vector2.Distance(new Vector2(transform.position.x, transform.position.y), new Vector2(_currentTargetInteractionCharacter.transform.position.x, _currentTargetInteractionCharacter.transform.position.y));
-                // Debug.Log($"<color=orange>[{_characterData.characterName}] NpcMovement arrived at approach point for '{_currentTargetInteractionCharacter.characterName}'. Final dist to char: {finalDist:F1}.</color>");
+                // Debug.Log($"<color=orange>[{_characterData.characterName}] NpcMovement arrived at approach point for '{_currentTargetInteractionCharacter.characterName}'. Final dist to char: {finalDist:F2}.</color>");
                 if (finalDist <= dialogueInitiationDistance * 1.1f)
                 {
                     StartDialogueAsync(_currentTargetInteractionCharacter);
                 }
                 else
                 {
-                    Debug.LogWarning($"[{_characterData.characterName}] Approached point for '{_currentTargetInteractionCharacter.characterName}', but character moved out of dialogue range ({finalDist:F1} > {dialogueInitiationDistance * 1.1f}). Re-evaluating (Idle).");
+                    Debug.LogWarning($"[{_characterData.characterName}] Approached point for '{_currentTargetInteractionCharacter.characterName}', but character moved out of dialogue range ({finalDist:F2} > {dialogueInitiationDistance * 1.1f:F2}). Returning to Idle.");
                      _originalTargetLandmarkForWaiting = null;
                     ChangeState(NpcBehaviorState.Idle);
                 }
@@ -520,7 +520,7 @@ public class NpcController : MonoBehaviour
         };
 
         string charNameForLog = _characterData != null ? _characterData.characterName : (selfIdentifier != null ? selfIdentifier.name : "NpcController (unknown)");
-        // Debug.Log($"<color=cyan>[{charNameForLog}] Requesting MOVEMENT. Re-eval Reason: {isReEvaluationDueToReason}. Context: '{requestPayload.recent_dialogue_summary_for_movement?.Substring(0, Mathf.Min(requestPayload.recent_dialogue_summary_for_movement?.Length ?? 0, 100))}...'</color>");
+        // Debug.Log($"<color=cyan>[{charNameForLog}] Requesting MOVEMENT. Re-eval Reason: {isReEvaluationDueToReason}. Context: '{requestPayload.recent_dialogue_summary_for_movement?.Substring(0, Math.Min(requestPayload.recent_dialogue_summary_for_movement.Length, 50))}...'</color>");
 
         NpcMovementResponse response = await ApiService.PostAsync<NpcMovementRequest, NpcMovementResponse>("/npc/think", requestPayload);
 
@@ -535,7 +535,7 @@ public class NpcController : MonoBehaviour
         _isApiCallInProgress = false;
 
         if (response != null && response.target_destination != null) {
-            // Debug.Log($"<color=#90EE90>[{_characterData.characterName}] Movement decision RX. Action: '{response.chosen_action_summary}'. Target: ({response.target_destination.x:F1}, {response.target_destination.y:F1})</color>");
+            // Debug.Log($"<color=#90EE90>[{_characterData.characterName}] Movement decision RX. Action: '{response.chosen_action_summary}'. Target: ({response.target_destination.x:F1}, {response.target_destination.y:F1}).</color>");
             Vector3 potentialTargetWorld = new Vector3(response.target_destination.x, response.target_destination.y, transform.position.z);
 
             bool canProceedToTargetDirectly = true;
@@ -558,13 +558,13 @@ public class NpcController : MonoBehaviour
                     }
 
                      if (_originalTargetLandmarkForWaiting != null) {
-                        // Debug.Log($"<color=#FFDEAD>[{_characterData.characterName}] Backend suggested moving to a waiting spot for original target '{originalTargetNameFromAction}'. Waiting spot is new target.</color>");
+                        // Debug.Log($"<color=#FFDEAD>[{_characterData.characterName}] Backend suggested moving to a waiting spot for original target '{originalTargetNameFromAction}'. Waiting spot: ({potentialTargetWorld.x:F1}, {potentialTargetWorld.y:F1}).</color>");
                      } else {
-                        Debug.LogWarning($"<color=yellow>[{_characterData.characterName}] Backend suggested waiting for '{originalTargetNameFromAction}', but landmark not found in scene. Proceeding with backend target as is.</color>");
+                        Debug.LogWarning($"<color=yellow>[{_characterData.characterName}] Backend suggested waiting for '{originalTargetNameFromAction}', but landmark not found in scene. Proceeding to coordinates anyway.</color>");
                         _originalTargetLandmarkForWaiting = null;
                      }
                 } else {
-                     Debug.LogWarning($"<color=yellow>[{_characterData.characterName}] Backend action summary '{response.chosen_action_summary}' implies waiting, but could not parse original target name.</color>");
+                     Debug.LogWarning($"<color=yellow>[{_characterData.characterName}] Backend action summary '{response.chosen_action_summary}' implies waiting, but could not parse original target name. Proceeding to coordinates.</color>");
                      _originalTargetLandmarkForWaiting = null;
                 }
             }
@@ -597,7 +597,7 @@ public class NpcController : MonoBehaviour
 
             if (!canProceedToTargetDirectly)
             {
-                // Debug.LogWarning($"<color=yellow>[{_characterData.characterName}] Cannot proceed directly to LLM target ({potentialTargetWorld.x:F1}, {potentialTargetWorld.y:F1}). Reason: {currentAbortReasonForDirectMove}. Re-requesting with block info.</color>");
+                // Debug.LogWarning($"<color=yellow>[{_characterData.characterName}] Cannot proceed directly to LLM target ({potentialTargetWorld.x:F1}, {potentialTargetWorld.y:F1}). Reason: {currentAbortReasonForDirectMove}. Re-requesting movement.</color>");
                 _lastMovementAbortReason = currentAbortReasonForDirectMove;
                 if (this == null || gameObject == null || !enabled) {
                      Debug.LogWarning($"[{_characterData.characterName}] NPC destroyed before re-requesting movement due to block. Aborting re-request.");
@@ -622,7 +622,7 @@ public class NpcController : MonoBehaviour
 
             if (response.updated_emotional_state_snapshot != null) {
                 _currentNpcEmotionalState = response.updated_emotional_state_snapshot;
-                // Debug.Log($"<color=grey>[{_characterData.characterName}] Emotional state updated from API to: {_currentNpcEmotionalState.primary_emotion} (Intensity: {_currentNpcEmotionalState.intensity:F1})</color>");
+                // Debug.Log($"<color=grey>[{_characterData.characterName}] Emotional state updated from API to: {_currentNpcEmotionalState.primary_emotion} (Intensity: {_currentNpcEmotionalState.intensity:F1}).</color>");
             }
 
             bool wasDialogueDriven = response.primary_decision_drivers.GetValueOrDefault("dialogue_driven", false);
@@ -643,7 +643,7 @@ public class NpcController : MonoBehaviour
             }
             else if (wasSociallyDriven && !isReEvaluationDueToReason)
             {
-                string targetNpcName = ParseTargetNpcNameFromSocialAction(finalActionSummary); // *** Method call that caused error ***
+                string targetNpcName = ParseTargetNpcNameFromSocialAction(finalActionSummary);
                 if (!string.IsNullOrEmpty(targetNpcName))
                 {
                     CharacterData socialTarget = FindCharacterByName(targetNpcName);
@@ -654,18 +654,18 @@ public class NpcController : MonoBehaviour
                          _originalTargetLandmarkForWaiting = null;
                         ChangeState(NpcBehaviorState.ApproachingInteraction);
                         ShowDialogueBubble_TMP($"I think I'll go say hi to {targetNpcName}.", dialogueDisplayTime * 0.9f);
-                        return; 
+                        return;
                     }
                     else
                     {
-                        Debug.LogWarning($"[{_characterData.characterName}] LLM wanted to socialize with '{targetNpcName}', but character not found or is self. Will move to target coordinates if any.");
+                        Debug.LogWarning($"[{_characterData.characterName}] LLM wanted to socialize with '{targetNpcName}', but character not found or is self. Will move to target coordinates if valid.");
                          ShowDialogueBubble_TMP($"Hmm... I will {finalActionSummary.ToLower()}.", dialogueDisplayTime * 0.9f);
                          if (_currentState != NpcBehaviorState.Interacting && _currentState != NpcBehaviorState.WaitingNearTarget && _currentState != NpcBehaviorState.ApproachingInteraction) {
                             ChangeState(NpcBehaviorState.MovingToTarget);
                         }
                     }
                 } else {
-                     Debug.LogWarning($"[{_characterData.characterName}] LLM indicated social interaction but target NPC name could not be parsed from '{finalActionSummary}'. Moving to coordinates if specified.");
+                     Debug.LogWarning($"[{_characterData.characterName}] LLM indicated social interaction but target NPC name could not be parsed from '{finalActionSummary}'. Moving to coordinates.");
                      ShowDialogueBubble_TMP($"Hmm... I will {finalActionSummary.ToLower()}.", dialogueDisplayTime * 0.9f);
                      if (_currentState != NpcBehaviorState.Interacting && _currentState != NpcBehaviorState.WaitingNearTarget && _currentState != NpcBehaviorState.ApproachingInteraction) {
                         ChangeState(NpcBehaviorState.MovingToTarget);
@@ -709,7 +709,7 @@ public class NpcController : MonoBehaviour
 
         if (_waitingTimer > MaxWaitTimeNearTarget)
         {
-            // Debug.Log($"<color=yellow>[{_characterData.characterName}] Waited too long for '{_originalTargetLandmarkForWaiting.landmarkName}'. Max wait time {MaxWaitTimeNearTarget}s exceeded. Re-evaluating (Idle).</color>");
+            // Debug.Log($"<color=yellow>[{_characterData.characterName}] Waited too long for '{_originalTargetLandmarkForWaiting.landmarkName}'. Max wait time {MaxWaitTimeNearTarget}s exceeded. Giving up and switching plans.</color>");
             string reason = $"Waited too long for '{_originalTargetLandmarkForWaiting.landmarkName}' to become available.";
             _originalTargetLandmarkForWaiting = null;
             _lastMovementAbortReason = reason;
@@ -747,7 +747,7 @@ public class NpcController : MonoBehaviour
 
                 if (_npcMovement != null) {
                      _npcMovement.SetMoveTarget(_currentMovementTargetWorld, () => {
-                        HandleArrivalAtMovementTarget(_currentMovementTargetWorld, false); 
+                        HandleArrivalAtMovementTarget(_currentMovementTargetWorld, false);
                      });
                 }
                 ChangeState(NpcBehaviorState.MovingToTarget);
@@ -782,7 +782,7 @@ public class NpcController : MonoBehaviour
             return;
         }
 
-        _originalTargetLandmarkForWaiting = null; 
+        _originalTargetLandmarkForWaiting = null;
 
         ChangeState(NpcBehaviorState.RequestingDecision);
         _isApiCallInProgress = true;
@@ -799,7 +799,7 @@ public class NpcController : MonoBehaviour
         }
 
         string selfEmotionStringForPrompt = $"{_currentNpcEmotionalState.primary_emotion} (intensity: {_currentNpcEmotionalState.intensity:F1})";
-        // Debug.Log($"<color=orange>[{_characterData.characterName}] Initiating DIALOGUE with '{otherCharacter.characterName}'. FollowUp: {isFollowUpDialogue}. LLM Seed: '{npcInitialPromptForLLM}'. Emotion: {selfEmotionStringForPrompt}</color>");
+        // Debug.Log($"<color=orange>[{_characterData.characterName}] Initiating DIALOGUE with '{otherCharacter.characterName}'. FollowUp: {isFollowUpDialogue}. LLM Seed: '{npcInitialPromptForLLM}'. Emotion: {selfEmotionStringForPrompt}.</color>");
 
         var interactionRequest = new GameInteractionRequest {
             interacting_objects = new List<InteractingObjectInfo> {
@@ -852,69 +852,108 @@ public class NpcController : MonoBehaviour
             }
         } else {
             Debug.LogError($"[{_characterData.characterName}] Dialogue with '{otherCharacter.characterName}' failed or no history.");
-            ShowDialogueBubble_TMP("[Dialogue Error]", 2f);
+            ShowDialogueBubble_TMP("[對話錯誤]", 2f);
         }
         ChangeState(NpcBehaviorState.PostInteractionPause);
     }
 
-public void ShowDialogueBubble_TMP(string message, float duration)
-{
-    Debug.Log($"[Bubble DEBUG] NPC '{_characterData.characterName}' 嘗試顯示氣泡內容：{message}");
-
-    if (dialogueBubblePrefab_TMP == null)
+    /// <summary>
+    /// 🔧 修復版本：顯示 NPC 頭頂對話氣泡
+    /// </summary>
+    /// <param name="message">要顯示的訊息內容</param>
+    /// <param name="duration">顯示持續時間（秒）</param>
+    public void ShowDialogueBubble_TMP(string message, float duration)
     {
-        Debug.LogWarning($"[Bubble WARNING] NPC '{_characterData.characterName}' 沒有指定 dialogueBubblePrefab_TMP！");
-        
-        if (dialogueUIManager != null && dialogueUIManager.gameObject.activeInHierarchy)
+        // 🔧 修復：加強參數驗證和錯誤處理
+        if (string.IsNullOrEmpty(message))
         {
-            dialogueUIManager.ShowDialogue(_characterData.characterName, message, duration);
+            string npcName = _characterData?.characterName ?? "Unknown NPC";
+            Debug.LogError($"[Bubble ERROR] NPC '{npcName}' 嘗試顯示空白或無效的對話內容。");
+            return;
+        }
+
+        // 🔧 修復：確保 _characterData 不為 null
+        if (_characterData == null)
+        {
+            Debug.LogError($"[Bubble ERROR] CharacterData 為 null，無法顯示對話氣泡。訊息：{message}");
+            return;
+        }
+
+        Debug.Log($"[Bubble DEBUG] NPC '{_characterData.characterName}' 嘗試顯示氣泡內容：{message}");
+
+        // 🔧 修復：改善 fallback 機制
+        if (dialogueBubblePrefab_TMP == null)
+        {
+            Debug.LogWarning($"[Bubble WARNING] NPC '{_characterData.characterName}' 沒有指定 dialogueBubblePrefab_TMP！");
+
+            // Fallback to DialogueUIManager
+            if (dialogueUIManager != null && dialogueUIManager.gameObject.activeInHierarchy)
+            {
+                dialogueUIManager.ShowDialogue(_characterData.characterName, message, duration);
+                Debug.Log($"[Bubble INFO] 已使用 UIManager 作為替代方案顯示對話：{message}");
+            }
+            else
+            {
+                // 最終 fallback：使用 Debug.Log
+                Debug.LogError($"[Bubble ERROR] '{_characterData.characterName}' 缺少 prefab 且無法 fallback 至 UIManager。訊息：{message}", this);
+            }
+            return;
+        }
+
+        // 停止之前的氣泡隱藏協程
+        if (_hideBubbleCoroutine != null)
+        {
+            StopCoroutine(_hideBubbleCoroutine);
+            _hideBubbleCoroutine = null;
+        }
+
+        // 🔧 修復：改善氣泡實例管理
+        if (_currentDialogueBubbleInstance == null)
+        {
+            Vector3 bubblePosition = transform.position + Vector3.up * dialogueBubbleOffsetY;
+            _currentDialogueBubbleInstance = Instantiate(dialogueBubblePrefab_TMP, bubblePosition, Quaternion.identity, transform);
+            Debug.Log($"[Bubble DEBUG] 已實例化對話氣泡於位置：{bubblePosition}");
+
+            // 嘗試多種方式找到 TextMeshProUGUI 組件
+            _dialogueTextTMP = _currentDialogueBubbleInstance.GetComponentInChildren<TextMeshProUGUI>();
+            if (_dialogueTextTMP == null)
+            {
+                _dialogueTextTMP = _currentDialogueBubbleInstance.GetComponent<TextMeshProUGUI>();
+            }
+        }
+
+        // 🔧 修復：確保找到 TextMeshProUGUI 組件後才設定文字
+        if (_dialogueTextTMP != null)
+        {
+            _dialogueTextTMP.text = message;
+            Debug.Log($"[Bubble DEBUG] 成功設定 TextMeshProUGUI 文字：{message}");
+            _currentDialogueBubbleInstance.SetActive(true);
+
+            // 設定自動隱藏
+            if (duration > 0)
+            {
+                _hideBubbleCoroutine = StartCoroutine(HideDialogueBubbleAfterDelay_TMP(duration));
+            }
         }
         else
         {
-            Debug.LogError($"[Bubble ERROR] '{_characterData.characterName}' 缺少 prefab 且無法 fallback 至 UIManager，訊息如下：{message}", this);
-        }
-        return;
-    }
+            Debug.LogError($"[Bubble ERROR] '{_characterData.characterName}' 的 Dialogue Bubble Prefab 中沒有找到 TextMeshProUGUI 元件！", this);
 
-    if (_hideBubbleCoroutine != null)
-    {
-        StopCoroutine(_hideBubbleCoroutine);
-        _hideBubbleCoroutine = null;
-    }
+            // 🔧 修復：清理無效的氣泡實例
+            if (_currentDialogueBubbleInstance != null)
+            {
+                Destroy(_currentDialogueBubbleInstance);
+                _currentDialogueBubbleInstance = null;
+            }
 
-    if (_currentDialogueBubbleInstance == null)
-    {
-        Vector3 bubblePosition = transform.position + Vector3.up * dialogueBubbleOffsetY;
-        _currentDialogueBubbleInstance = Instantiate(dialogueBubblePrefab_TMP, bubblePosition, Quaternion.identity, transform);
-        Debug.Log($"[Bubble DEBUG] 已實例化對話氣泡於位置：{bubblePosition}");
-
-        _dialogueTextTMP = _currentDialogueBubbleInstance.GetComponentInChildren<TextMeshProUGUI>();
-        if (_dialogueTextTMP == null)
-        {
-            _dialogueTextTMP = _currentDialogueBubbleInstance.GetComponent<TextMeshProUGUI>();
+            // 嘗試使用 fallback
+            if (dialogueUIManager != null && dialogueUIManager.gameObject.activeInHierarchy)
+            {
+                dialogueUIManager.ShowDialogue(_characterData.characterName, message, duration);
+                Debug.Log($"[Bubble INFO] 因 prefab 問題改用 UIManager 顯示：{message}");
+            }
         }
     }
-
-    if (_dialogueTextTMP != null)
-    {
-        _dialogueTextTMP.text = message;
-        Debug.Log($"[Bubble DEBUG] 設定 TextMeshProUGUI 為：{message}");
-        _currentDialogueBubbleInstance.SetActive(true);
-
-        if (duration > 0)
-        {
-            _hideBubbleCoroutine = StartCoroutine(HideDialogueBubbleAfterDelay_TMP(duration));
-        }
-    }
-    else
-    {
-        Debug.LogError($"[Bubble ERROR] '{_characterData.characterName}' 的 Dialogue Bubble Prefab 中沒有找到 TextMeshProUGUI 元件！", this);
-        if (_currentDialogueBubbleInstance != null)
-        {
-            Destroy(_currentDialogueBubbleInstance);
-        }
-    }
-}
 
     private IEnumerator HideDialogueBubbleAfterDelay_TMP(float delay)
     {
@@ -977,14 +1016,14 @@ public void ShowDialogueBubble_TMP(string message, float duration)
                 {
                     eventLandmark.UpdateDynamicStatusByPrefix(OwnerPresenceStatusPrefix, OwnerPresencePresent);
                 }
-                else if (eventLandmark.landmarkTypeTag == "bathroom")
+                                else if (eventLandmark.landmarkTypeTag == "bathroom")
                 {
                     if (!eventLandmark.HasDynamicStatusWithPrefix(OccupancyStatusPrefix) ||
                         eventLandmark.HasDynamicStatus(GetOccupancyStatusOccupiedBySelf()))
                     {
                          eventLandmark.UpdateDynamicStatusByPrefix(OccupancyStatusPrefix, GetOccupancyStatusOccupiedBySelf());
                     } else if (eventLandmark.HasDynamicStatusWithPrefix(OccupancyStatusPrefix) && !eventLandmark.HasDynamicStatus(GetOccupancyStatusOccupiedBySelf()) ){
-                        Debug.LogWarning($"[{_characterData.characterName}] Arrived at bathroom '{eventLandmark.landmarkName}' but it's already occupied by someone else. Status was not pre-checked or wait logic failed?");
+                        Debug.LogWarning($"[{_characterData.characterName}] Arrived at bathroom '{eventLandmark.landmarkName}' but it's already occupied by someone else. Status was not pre-checked properly.");
                     }
                 }
                 // Debug.Log($"[{_characterData.characterName}] Entered zone: '{eventLandmark.landmarkName}' ({eventLandmark.landmarkTypeTag}).");
@@ -1091,14 +1130,13 @@ public void ShowDialogueBubble_TMP(string message, float duration)
         return foundLandmark;
     }
 
-    // *** 此處定義了 ParseOriginalTargetFromWaitingAction ***
     private string ParseOriginalTargetFromWaitingAction(string actionSummary)
     {
         if (string.IsNullOrEmpty(actionSummary)) return null;
-        
+
         // Pattern to match "wait near Landmark_Name" or "wait near Landmark Name" (possibly with parentheses after)
         // It tries to capture a sequence of words after "wait near " that doesn't start with '('
-        string pattern = @"wait near\s+([A-Za-z0-9_'-]+(?:\s+[A-Za-z0-9_'-]+)*)"; 
+        string pattern = @"wait near\s+([A-Za-z0-9_'-]+(?:\s+[A-Za-z0-9_'-]+)*)";
         Match match = Regex.Match(actionSummary, pattern, RegexOptions.IgnoreCase);
         if (match.Success && match.Groups.Count > 1)
         {
@@ -1123,8 +1161,7 @@ public void ShowDialogueBubble_TMP(string message, float duration)
         // Debug.LogWarning($"Could not parse original target from action: '{actionSummary}'");
         return null;
     }
-    
-    // *** 此處定義了 ParseTargetNpcNameFromSocialAction ***
+
     private string ParseTargetNpcNameFromSocialAction(string actionSummary)
     {
         if (string.IsNullOrEmpty(actionSummary)) return null;
@@ -1139,13 +1176,12 @@ public void ShowDialogueBubble_TMP(string message, float duration)
         return null;
     }
 
-    // *** 此處定義了 FindCharacterByName ***
     private CharacterData FindCharacterByName(string name)
     {
         if (string.IsNullOrEmpty(name)) return null;
 
         // Ideal way: if SceneContextManager caches and provides a list of all CharacterData
-        // List<CharacterData> allCharacters = sceneContextManager?.GetAllCharacterDataInstances(); 
+        // List<CharacterData> allCharacters = sceneContextManager?.GetAllCharacterDataInstances();
         // if (allCharacters != null) { ... }
 
         // Fallback: FindObjectsOfType - use with caution if called very frequently or in large scenes
