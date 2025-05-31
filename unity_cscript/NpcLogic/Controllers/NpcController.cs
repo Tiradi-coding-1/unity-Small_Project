@@ -654,7 +654,7 @@ public class NpcController : MonoBehaviour
                          _originalTargetLandmarkForWaiting = null;
                         ChangeState(NpcBehaviorState.ApproachingInteraction);
                         ShowDialogueBubble_TMP($"I think I'll go say hi to {targetNpcName}.", dialogueDisplayTime * 0.9f);
-                        return;
+                        return; 
                     }
                     else
                     {
@@ -747,7 +747,7 @@ public class NpcController : MonoBehaviour
 
                 if (_npcMovement != null) {
                      _npcMovement.SetMoveTarget(_currentMovementTargetWorld, () => {
-                        HandleArrivalAtMovementTarget(_currentMovementTargetWorld, false);
+                        HandleArrivalAtMovementTarget(_currentMovementTargetWorld, false); 
                      });
                 }
                 ChangeState(NpcBehaviorState.MovingToTarget);
@@ -782,7 +782,7 @@ public class NpcController : MonoBehaviour
             return;
         }
 
-        _originalTargetLandmarkForWaiting = null;
+        _originalTargetLandmarkForWaiting = null; 
 
         ChangeState(NpcBehaviorState.RequestingDecision);
         _isApiCallInProgress = true;
@@ -885,7 +885,7 @@ public class NpcController : MonoBehaviour
         if (dialogueBubblePrefab_TMP == null)
         {
             Debug.LogWarning($"[Bubble WARNING] NPC '{_characterData.characterName}' 沒有指定 dialogueBubblePrefab_TMP！");
-
+            
             // Fallback to DialogueUIManager
             if (dialogueUIManager != null && dialogueUIManager.gameObject.activeInHierarchy)
             {
@@ -938,14 +938,14 @@ public class NpcController : MonoBehaviour
         else
         {
             Debug.LogError($"[Bubble ERROR] '{_characterData.characterName}' 的 Dialogue Bubble Prefab 中沒有找到 TextMeshProUGUI 元件！", this);
-
+            
             // 🔧 修復：清理無效的氣泡實例
             if (_currentDialogueBubbleInstance != null)
             {
                 Destroy(_currentDialogueBubbleInstance);
                 _currentDialogueBubbleInstance = null;
             }
-
+            
             // 嘗試使用 fallback
             if (dialogueUIManager != null && dialogueUIManager.gameObject.activeInHierarchy)
             {
@@ -1133,10 +1133,10 @@ public class NpcController : MonoBehaviour
     private string ParseOriginalTargetFromWaitingAction(string actionSummary)
     {
         if (string.IsNullOrEmpty(actionSummary)) return null;
-
+        
         // Pattern to match "wait near Landmark_Name" or "wait near Landmark Name" (possibly with parentheses after)
         // It tries to capture a sequence of words after "wait near " that doesn't start with '('
-        string pattern = @"wait near\s+([A-Za-z0-9_'-]+(?:\s+[A-Za-z0-9_'-]+)*)";
+        string pattern = @"wait near\s+([A-Za-z0-9_'-]+(?:\s+[A-Za-z0-9_'-]+)*)"; 
         Match match = Regex.Match(actionSummary, pattern, RegexOptions.IgnoreCase);
         if (match.Success && match.Groups.Count > 1)
         {
@@ -1161,7 +1161,7 @@ public class NpcController : MonoBehaviour
         // Debug.LogWarning($"Could not parse original target from action: '{actionSummary}'");
         return null;
     }
-
+    
     private string ParseTargetNpcNameFromSocialAction(string actionSummary)
     {
         if (string.IsNullOrEmpty(actionSummary)) return null;
@@ -1181,7 +1181,7 @@ public class NpcController : MonoBehaviour
         if (string.IsNullOrEmpty(name)) return null;
 
         // Ideal way: if SceneContextManager caches and provides a list of all CharacterData
-        // List<CharacterData> allCharacters = sceneContextManager?.GetAllCharacterDataInstances();
+        // List<CharacterData> allCharacters = sceneContextManager?.GetAllCharacterDataInstances(); 
         // if (allCharacters != null) { ... }
 
         // Fallback: FindObjectsOfType - use with caution if called very frequently or in large scenes
